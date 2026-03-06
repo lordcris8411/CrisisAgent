@@ -204,9 +204,15 @@
             position: relative;
         }
 
-        .input-wrapper { background: #16181d; border-radius: 12px; padding: 10px 15px; display: flex; border: 1px solid var(--border); align-items: center; }
+        .input-wrapper { background: #16181d; border-radius: 12px; padding: 10px 15px; display: flex; border: 1px solid var(--border); align-items: center; gap: 10px; }
         #prompt-input { background: transparent; border: none; color: var(--text-main); flex: 1; outline: none; font-size: 1rem; padding: 0 10px; }
-        #send-btn { background: #334155; color: white; border: none; padding: 8px 15px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        
+        .think-toggle-container {
+            display: flex; align-items: center; gap: 8px; font-size: 0.75rem; color: var(--text-dim);
+            padding-right: 10px; border-right: 1px solid var(--border);
+        }
+
+        #send-btn { background: #334155; color: white; border: none; padding: 8px 15px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
         #send-btn.stop { background: #7f1d1d; }
         
         .upload-btn { background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 1.2rem; padding: 5px; transition: color 0.2s; display: flex; align-items: center; }
@@ -319,6 +325,13 @@
                         <input type="file" id="file-input" style="display: none;" onchange="handleFile(this)">
                         <button class="upload-btn" onclick="document.getElementById('file-input').click()" title="Upload File">📎</button>
                         <input type="text" id="prompt-input" placeholder="Type / for commands..." autocomplete="off">
+                        <div class="think-toggle-container">
+                            <span>Think</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="cli-think-toggle" onchange="toggleConfig('cli_think', this.checked)">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
                         <button id="send-btn">Send</button>
                     </div>
                 </div>
@@ -361,6 +374,12 @@
 
         async function toggleSkill(name, status) {
             try { await fetch('/api/set_skill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, enabled: status }) }); } catch (e) {}
+        }
+
+        function toggleConfig(key, status) {
+            if (key === 'cli_think') {
+                sendCommand(`/set cli_think ${status ? 'on' : 'off'}`);
+            }
         }
 
         const COMMANDS = [
@@ -465,11 +484,10 @@
                 if (data.type === 'history') { chatHistory.innerHTML = ''; data.history.forEach(appendMessage); }
                 else if (data.type === 'clear') { chatHistory.innerHTML = ''; last_div = null; }
                 else if (data.type === 'reboot') { showRebootOverlay(); }
-                else if (data.type === 'tokens') {
-                    document.getElementById('total-tokens').innerText = data.total;
-                    document.getElementById('prompt-tokens').innerText = data.prompt;
-                    document.getElementById('response-tokens').innerText = data.response;
-                } 
+                else if (data.type === 'config') {
+                    const cliToggle = document.getElementById('cli-think-toggle');
+                    if (cliToggle) cliToggle.checked = data.cli_think;
+                }
                 else if (data.type === 'console_log') {
                     const cleanText = data.content.replace(/\x1b\[[0-9;]*m/g, '');
                     if (!cleanText.trim()) return;

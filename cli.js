@@ -113,6 +113,7 @@ wss.on('connection', (ws) => {
   });
   ws.send(JSON.stringify({ type: 'history', history }));
   broadcastTokens();
+  broadcastConfig();
 });
 
 function broadcast(data) {
@@ -123,6 +124,10 @@ function broadcast(data) {
 
 function broadcastTokens() {
   broadcast({ type: 'tokens', total: totalPromptTokens + totalResponseTokens, prompt: totalPromptTokens, response: totalResponseTokens });
+}
+
+function broadcastConfig() {
+  broadcast({ type: 'config', cli_think: CONFIG.CLI_THINK, exec_think: CONFIG.EXECUTOR_THINK });
 }
 
 function logToWeb(content, type = 'console_log') {
@@ -366,12 +371,27 @@ async function processInput(line, source = 'terminal', images = [], files = [], 
     }, 500);
   }
   else if (input === '/help') {
-    let helpMsg = `=== CRISIS AGENT HELP ===\n` +
-      `Management: /clear, /reset, /reboot, /exit\n` +
-      `Debugging: /context, /system, /skill_debug\n` +
-      `Remote: /list skills, /list mcp functions, /set skill <name> <on/off>, /update_mcp, /pull_scripts\n` +
-      `Config: /set cli_think <on/off>, /set exec_think <on/off>`;
-    console.log(`${STYLES.cyan}\n${helpMsg}${STYLES.reset}`);
+    let helpMsg = `\n${STYLES.bold}${STYLES.cyan}=== CRISIS AGENT COMPREHENSIVE HELP ===${STYLES.reset}\n\n` +
+      `${STYLES.bold}[ 会话管理 (Session) ]${STYLES.reset}\n` +
+      `  /clear          - 清除终端屏幕内容\n` +
+      `  /reset          - 重置当前对话历史，清空 Token 计数\n` +
+      `  /reboot         - 重新启动整个系统（CLI + Executor）\n` +
+      `  /exit           - 退出 Crisis Agent\n\n` +
+      `${STYLES.bold}[ 调试与监控 (Debugging) ]${STYLES.reset}\n` +
+      `  /context        - 显示当前对话的上下文历史及 Token 消耗详情\n` +
+      `  /system         - 查看当前的系统提示词 (System Prompt) 及其 Token 成本\n` +
+      `  /skill_debug    - 诊断 Skill 状态，检查依赖的 MCP 原子功能是否缺失\n\n` +
+      `${STYLES.bold}[ 远程与 Skill 管理 (Remote & Skills) ]${STYLES.reset}\n` +
+      `  /list skills             - 列出所有可用 Skill 及其开启/关闭状态\n` +
+      `  /list mcp functions      - 列出 Executor 及其关联 MCP Server 的所有底层原子工具\n` +
+      `  /set skill <name> <on/off> - 动态开启或关闭指定的 Skill (例如: /set skill downloader off)\n` +
+      `  /update_mcp              - 触发 MCP 服务器代码同步（将本地修改同步至远程服务器）\n` +
+      `  /pull_scripts            - 从远程服务器拉取最新的脚本或配置\n\n` +
+      `${STYLES.bold}[ 配置选项 (Configuration) ]${STYLES.reset}\n` +
+      `  /set cli_think <on/off>  - 开启/关闭 CLI 层级的思考过程 (CoT) 显示\n` +
+      `  /set exec_think <on/off> - 开启/关闭 Executor 层级的思考过程 (CoT) 显示\n\n` +
+      `${STYLES.dim}提示: 直接输入自然语言即可开始与 AI 协作，AI 会根据需要自动调用上述 Skill。${STYLES.reset}\n`;
+    console.log(helpMsg);
     if (source === 'web') logToWeb(helpMsg);
     broadcast({ type: 'stream_end' });
   }
@@ -441,12 +461,14 @@ async function processInput(line, source = 'terminal', images = [], files = [], 
     CONFIG.CLI_THINK = input.includes('on');
     fs.writeFileSync('config.json', JSON.stringify(CONFIG, null, 2), 'utf8');
     logToWeb(`CLI Thinking: ${CONFIG.CLI_THINK ? 'ON' : 'OFF'}`);
+    broadcastConfig();
     broadcast({ type: 'stream_end' });
   }
   else if (input.startsWith('/set exec_think ')) {
     CONFIG.EXECUTOR_THINK = input.includes('on');
     fs.writeFileSync('config.json', JSON.stringify(CONFIG, null, 2), 'utf8');
     logToWeb(`Executor Thinking: ${CONFIG.EXECUTOR_THINK ? 'ON' : 'OFF'}`);
+    broadcastConfig();
     broadcast({ type: 'stream_end' });
   }
   else await chat(input, images, files, imageNames);
