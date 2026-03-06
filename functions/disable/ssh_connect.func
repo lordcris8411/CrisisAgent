@@ -1,0 +1,10 @@
+{
+  "name": "ssh_connect",
+  "description": "Establish a new SSH connection to a remote host.",
+  "use": [
+    "ssh_connect",
+    "ssh_get_status"
+  ],
+  "system": "You are an SSH connectivity expert. Your task is to connect to a remote server with host, username, and password. Always verify the current status before and after connecting.",
+  "enabled": false
+}

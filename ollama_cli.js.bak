@@ -1,0 +1,281 @@
+const readline = require('readline');
+const fs = require('fs');
+const path = require('path');
+
+// LOAD CONFIGURATION
+const configPath = path.join(__dirname, 'config.json');
+let CONFIG = { OLLAMA_HOST: 'http://172.16.1.20:12434', MODEL: 'qwen3.5:35b-a3b', MCP_SERVER_URL: 'http://172.16.1.XXX:3000', config: { think: false, verbose: true } };
+
+if (fs.existsSync(configPath))
+{
+  try { CONFIG = { ...CONFIG, ...JSON.parse(fs.readFileSync(configPath, 'utf8')) }; } catch (e) {}
+}
+
+const STYLES = { reset: '\x1b[0m', cyan: '\x1b[36m', bold: '\x1b[1m', green: '\x1b[32m', yellow: '\x1b[33m', dim: '\x1b[2m', red: '\x1b[31m' };
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: 'You> ' });
+
+let historyMessages = [];
+let allToolsRegistry = [];
+let enabledToolNames = new Set(["get_tool_usage"]);
+let currentAbortController = null;
+
+async function setupTools()
+{
+  try
+  {
+    const response = await fetch(`${CONFIG.MCP_SERVER_URL}/list`);
+    const { tools } = await response.json();
+    allToolsRegistry = tools.map(tool => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.inputSchema } }));
+    console.log(`${STYLES.green}Crisis Agent Connected.${STYLES.reset}`);
+    console.log('Commands: /clear, /reset, /context, /system, /update_mcp, /push, /pull, /set think=on/off, /set verbose=on/off\n');
+  }
+  catch (error) { console.error(`Remote Error: ${error.message}`); }
+}
+
+async function callRemoteTool(name, params = {})
+{
+  try
+  {
+    const response = await fetch(`${CONFIG.MCP_SERVER_URL}/call`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, arguments: params }) });
+    const res = await response.json();
+    if (name === "get_tool_usage" && params.tool_name) enabledToolNames.add(params.tool_name);
+    return res;
+  }
+  catch (error) { return { isError: true, content: [{ type: 'text', text: error.message }] }; }
+}
+
+/**
+ * 唯一源：构造带工具注册表的系统提示词
+ */
+function get_system_prompt()
+{
+  let systemPrompt = "";
+  if (fs.existsSync('system.md'))
+  {
+    systemPrompt = fs.readFileSync('system.md', 'utf8');
+    
+    const toolMap = {};
+    const groups = {
+      "File_Operations": ["read_file", "write_file", "append_file", "delete_file", "list_directory", "receive_file", "fetch_file"],
+      "System_Screen": ["capture_screen", "get_current_time", "get_screen_resolution", "run_application", "wait"],
+      "Automation": ["copy_to_clipboard", "paste_from_clipboard", "simulate_paste", "mouse_move", "mouse_click"],
+      "Core": ["get_tool_usage"]
+    };
+
+    for (const [groupName, toolNames] of Object.entries(groups))
+    {
+      const toolsInGroup = allToolsRegistry
+        .filter(t => toolNames.includes(t.function.name))
+        .map(t => ({ name: t.function.name, desc: t.function.description }));
+      
+      if (toolsInGroup.length > 0) toolMap[groupName] = toolsInGroup;
+    }
+
+    systemPrompt += "\n\n### Available Tools Registry (JSON):\n";
+    systemPrompt += "```json\n" + JSON.stringify(toolMap, null, 2) + "\n```";
+  }
+  return systemPrompt;
+}
+
+/**
+ * 唯一源：汇集当前所有要发送的消息
+ */
+function get_all_messages(user_prompt = null)
+{
+  const messages = [];
+  const systemContent = get_system_prompt();
+  if (systemContent) messages.push({ role: 'system', content: systemContent });
+  
+  // 过滤掉历史中可能存在的旧系统消息，确保只有一个最新的系统消息在头部
+  messages.push(...historyMessages.filter(m => m.role !== 'system'));
+  
+  if (user_prompt) messages.push({ role: 'user', content: user_prompt });
+  return messages;
+}
+
+/**
+ * 封装 LLM 调用逻辑
+ */
+async function call_llm(assembled_messages)
+{
+  const toolsToSend = allToolsRegistry.filter(t => enabledToolNames.has(t.function.name));
+  currentAbortController = new AbortController();
+
+  const response = await fetch(`${CONFIG.OLLAMA_HOST}/api/chat`, 
+  {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: CONFIG.MODEL, messages: assembled_messages, tools: toolsToSend, stream: true }),
+    signal: currentAbortController.signal
+  });
+
+  if (!response.ok) throw new Error(`Ollama HTTP ${response.status}`);
+  return response;
+}
+
+async function chat(userInput)
+{
+  const startTime = Date.now();
+  let firstTokenTime = null;
+
+  if (userInput)
+  {
+    historyMessages.push({ role: 'user', content: userInput });
+    enabledToolNames = new Set(["get_tool_usage"]);
+  }
+
+  try
+  {
+    const currentMessages = get_all_messages();
+    const response = await call_llm(currentMessages);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullContent = "";
+    let toolCalls = [];
+    let isThinking = false;
+    let buffer = '';
+
+    process.stdout.write(`${STYLES.bold}Ollama>${STYLES.reset} `);
+
+    while (true)
+    {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines)
+      {
+        if (!line.trim()) continue;
+        const data = JSON.parse(line);
+        const message = data.message;
+
+        if (firstTokenTime === null && (message?.content || message?.tool_calls)) firstTokenTime = Date.now();
+
+        if (data.thinking && CONFIG.config.think)
+        {
+          if (!isThinking) { process.stdout.write(`\n${STYLES.dim}[Thinking] `); isThinking = true; }
+          process.stdout.write(data.thinking);
+          continue;
+        }
+        if (message?.content)
+        {
+          if (isThinking) { process.stdout.write(`${STYLES.reset}\n\n`); isThinking = false; }
+          process.stdout.write(message.content);
+          fullContent += message.content;
+        }
+        if (message?.tool_calls) toolCalls = toolCalls.concat(message.tool_calls);
+        if (data.done)
+        {
+          process.stdout.write('\n');
+          const assistantMsg = { role: 'assistant', content: fullContent, tool_calls: toolCalls.length > 0 ? toolCalls : undefined };
+          historyMessages.push(assistantMsg);
+
+          if (toolCalls.length > 0)
+          {
+            for (const toolCall of toolCalls)
+            {
+              console.log(`${STYLES.dim}[Tool: ${toolCall.function.name}]${STYLES.reset}`);
+              const res = await callRemoteTool(toolCall.function.name, toolCall.function.arguments);
+              historyMessages.push({ role: 'tool', content: res.content.filter(c => c.type === 'text').map(c => c.text).join('\n'), tool_call_id: toolCall.id });
+              const imgs = res.content.filter(c => c.type === 'image').map(c => c.data);
+              if (imgs.length > 0) historyMessages.push({ role: 'user', content: "Visual data attached.", images: imgs });
+            }
+            return await chat(null);
+          }
+          if (CONFIG.config.verbose) console.log(`${STYLES.yellow}Time: ${Date.now() - startTime}ms | Prompt: ${data.prompt_eval_count} | Resp: ${data.eval_count}${STYLES.reset}\n`);
+        }
+      }
+    }
+  } 
+  catch (error) 
+  { 
+    if (error.name === 'AbortError') console.log(`${STYLES.red}\n[Interrupted]${STYLES.reset}\n`);
+    else console.error(`\nError: ${error.message}\n`); 
+  }
+  finally { currentAbortController = null; }
+}
+
+async function start()
+{
+  await setupTools();
+  rl.prompt();
+
+  rl.on('SIGINT', () => { if (currentAbortController) currentAbortController.abort(); else { console.log('\nGoodbye!'); process.exit(0); } });
+
+  rl.on('line', async (line) => 
+  {
+    const input = line.trim();
+    if (input === '/exit') rl.close();
+    else if (input === '/clear') { console.clear(); rl.prompt(); }
+    else if (input === '/reset') { historyMessages = []; console.log('Reset.'); rl.prompt(); }
+    else if (input === '/context')
+    {
+       const currentContext = get_all_messages();
+       console.log(`${STYLES.cyan}\n=== REAL-TIME LLM CONTEXT ===${STYLES.reset}`);
+       currentContext.forEach((m, i) => 
+       {
+          const roleStyle = m.role === 'system' ? STYLES.yellow : (m.role === 'user' ? STYLES.green : STYLES.cyan);
+          console.log(`${roleStyle}[${i}] ${m.role.toUpperCase()}:${STYLES.reset}`);
+          if (m.content) console.log(m.content);
+          if (m.tool_calls) console.log(`${STYLES.dim}Tool Calls: ${JSON.stringify(m.tool_calls)}${STYLES.reset}`);
+          if (m.images) console.log(`${STYLES.dim}[Contains ${m.images.length} Image(s)]${STYLES.reset}`);
+          console.log(`${STYLES.dim}-----------------------${STYLES.reset}`);
+       });
+       const totalChars = JSON.stringify(currentContext).length;
+       console.log(`${STYLES.bold}Total Messages: ${currentContext.length} | Raw Context Size: ${totalChars} chars${STYLES.reset}\n`);
+       rl.prompt();
+    }
+    else if (input === '/system')
+    {
+       console.log(`${STYLES.cyan}\n=== SYSTEM PROMPT ===${STYLES.reset}`);
+       console.log(get_system_prompt());
+       console.log(`${STYLES.dim}-----------------------${STYLES.reset}\n`);
+       rl.prompt();
+    }
+    else if (input === '/update_mcp')
+    {
+       const remoteRoot = 'D:/project/mcp_server';
+       const toolsDir = path.join(__dirname, 'tools');
+       if (fs.existsSync(toolsDir))
+       {
+          for (const f of fs.readdirSync(toolsDir))
+          {
+             const b64 = fs.readFileSync(path.join(toolsDir, f)).toString('base64');
+             await callRemoteTool('receive_file', { path: `${remoteRoot}/tools/${f}`, base64_content: b64 });
+             console.log(`Updated: tools/${f}`);
+          }
+       }
+       for (const f of ['package.json', 'mcp_server.js'])
+       {
+          const b64 = fs.readFileSync(path.join(__dirname, f)).toString('base64');
+          await callRemoteTool('receive_file', { path: `${remoteRoot}/${f}`, base64_content: b64 });
+          console.log(`Updated: ${f}`);
+       }
+       rl.prompt();
+    }
+    else if (input.startsWith('/push '))
+    {
+       const p = input.split(' ');
+       const b64 = fs.readFileSync(p[1]).toString('base64');
+       await callRemoteTool('receive_file', { path: p[2], base64_content: b64 });
+       rl.prompt();
+    }
+    else if (input.startsWith('/pull '))
+    {
+       const p = input.split(' ');
+       const res = await callRemoteTool('fetch_file', { path: p[1] });
+       const b64 = res.content.find(c => c.text.startsWith('BASE64_DATA:'))?.text.replace('BASE64_DATA:', '');
+       if (b64) fs.writeFileSync(p[2], Buffer.from(b64, 'base64'));
+       rl.prompt();
+    }
+    else if (input.startsWith('/set think=')) { CONFIG.config.think = input.includes('on'); console.log(`Think: ${CONFIG.config.think}`); rl.prompt(); }
+    else if (input.startsWith('/set verbose=')) { CONFIG.config.verbose = input.includes('on'); console.log(`Verbose: ${CONFIG.config.verbose}`); rl.prompt(); }
+    else if (input) { await chat(input); rl.prompt(); }
+    else rl.prompt();
+  }).on('close', () => process.exit(0));
+}
+
+start();

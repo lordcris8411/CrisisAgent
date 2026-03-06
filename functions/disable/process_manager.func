@@ -1,0 +1,6 @@
+{
+  "name": "process_manager",
+  "description": "List and monitor active system processes on the target machine.",
+  "use": ["get_process_list"],
+  "system": "You are a process management expert. Your task is to provide a clear list of active processes, identifying those with high resource consumption if requested."
+}

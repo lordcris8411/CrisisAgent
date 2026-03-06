@@ -1,0 +1,6 @@
+{
+  "name": "time_teller",
+  "description": "Get the current system date and time from the remote machine.",
+  "use": ["get_current_time"],
+  "system": "You are a time-keeping specialist. Your goal is to report the current date and time precisely from the system clock."
+}

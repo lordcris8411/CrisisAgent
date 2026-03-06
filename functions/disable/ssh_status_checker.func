@@ -1,0 +1,9 @@
+{
+  "name": "ssh_status_checker",
+  "description": "Check the current status and host of the active SSH connection.",
+  "use": [
+    "ssh_get_status"
+  ],
+  "system": "You are an SSH monitoring specialist. Your goal is to tell the user if an SSH session is currently active and provide connection details if so.",
+  "enabled": false
+}

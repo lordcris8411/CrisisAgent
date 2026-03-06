@@ -1,0 +1,6 @@
+{
+  "name": "archive_master",
+  "description": "Compress files or folders into highly efficient archives (7z, zip, tar).",
+  "use": ["archive_compress"],
+  "system": "You are a compression expert. Your goal is to pack files or directories into archives using 7-Zip. Prefer '.7z' for maximum efficiency unless the user specifies otherwise."
+}

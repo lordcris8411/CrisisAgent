@@ -1,0 +1,10 @@
+{
+  "name": "ssh_commander",
+  "description": "Execute commands on the currently connected SSH server.",
+  "use": [
+    "ssh_execute",
+    "ssh_get_status"
+  ],
+  "system": "You are a remote systems administrator. Your task is to execute commands via an active SSH session and report the output clearly.",
+  "enabled": false
+}

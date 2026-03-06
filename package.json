@@ -1,0 +1,29 @@
+{
+  "name": "ollama",
+  "version": "1.0.0",
+  "description": "",
+  "main": "ollama_cli.js",
+  "scripts": {
+    "start": "node start.js",
+    "executor": "node executor_server.js",
+    "cli": "node cli.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "clipboardy": "^5.3.1",
+    "node-ssh": "^13.2.1",
+    "screenshot-desktop": "^1.15.3",
+    "sharp": "^0.34.5",
+    "ws": "^8.19.0"
+  },
+  "nodemonConfig": {
+    "watch": [
+      "mcp_server.js"
+    ]
+  }
+}

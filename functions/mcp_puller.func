@@ -1,0 +1,6 @@
+{
+  "name": "mcp_puller",
+  "description": "Download and synchronize all automation scripts from the remote 'scripts/' directory to the local machine.",
+  "use": [],
+  "system": "You are a synchronization expert. Your task is to pull all persistent scripts from the remote server back to the local development environment."
+}

@@ -1,0 +1,6 @@
+{
+  "name": "system_monitor",
+  "description": "Check CPU usage, memory usage, and free disk space on the target machine.",
+  "use": ["get_system_stats"],
+  "system": "You are a system administrator. Your task is to report the current performance metrics of the target machine, including CPU, Memory, and Disk space."
+}

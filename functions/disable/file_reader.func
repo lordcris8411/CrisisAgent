@@ -1,0 +1,6 @@
+{
+  "name": "file_reader",
+  "description": "Explore and read content of files and directories on the system.",
+  "use": ["read_file", "list_directory"],
+  "system": "You are a file system analyst. Your task is to accurately read file contents and list directories as requested. If a path is not provided, start by listing the current directory."
+}

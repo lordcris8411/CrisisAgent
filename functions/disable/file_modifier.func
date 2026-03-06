@@ -1,0 +1,6 @@
+{
+  "name": "file_modifier",
+  "description": "Modify existing files by reading, appending, or overwriting content.",
+  "use": ["read_file", "write_file", "append_file"],
+  "system": "You are a file modification expert. To modify a file precisely, you should first read its content, then perform the necessary edits. Use 'append_file' for additions and 'write_file' for full rewrites."
+}

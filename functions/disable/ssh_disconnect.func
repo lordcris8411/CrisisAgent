@@ -1,0 +1,10 @@
+{
+  "name": "ssh_disconnect",
+  "description": "Disconnect from the current SSH session.",
+  "use": [
+    "ssh_disconnect",
+    "ssh_get_status"
+  ],
+  "system": "You are an SSH session manager. Your task is to safely close the active SSH connection.",
+  "enabled": false
+}

@@ -1,0 +1,6 @@
+{
+  "name": "archive_extractor",
+  "description": "Extract any common archive format (ZIP, RAR, 7Z, TAR, GZ) into a directory.",
+  "use": ["archive_extract"],
+  "system": "You are a data extraction specialist. Your task is to unpack archive files. You can handle almost any format including RAR and 7Z."
+}
