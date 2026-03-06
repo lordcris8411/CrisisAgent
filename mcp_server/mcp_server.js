@@ -35,52 +35,13 @@ const fileOps = safeRequire('./tools/file_ops');
 const systemOps = safeRequire('./tools/system_ops');
 const clipboardOps = safeRequire('./tools/clipboard_ops');
 const automationOps = safeRequire('./tools/automation_ops');
-const sshOps = safeRequire('./tools/ssh_ops');
 const archiveOps = safeRequire('./tools/archive_ops');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '100mb' }));
 
-// --- Streaming Endpoints with Security ---
-
-function checkAuth(req, res, next) {
-  const token = req.headers['x-auth-token'];
-  if (token !== CONFIG.AUTH_TOKEN) {
-    console.log(`${STYLES.red}[SECURITY] Blocked unauthorized access attempt from ${req.ip}${STYLES.reset}`);
-    return res.status(401).send("Unauthorized: Invalid Token");
-  }
-  next();
-}
-
-// 流式下载接口 (Remote -> Local)
-app.get("/download", checkAuth, (req, res) => {
-  const filePath = req.query.path;
-  if (!filePath || !fs.existsSync(filePath)) {
-    return res.status(404).send("File not found");
-  }
-  const stats = fs.statSync(filePath);
-  res.setHeader('Content-Length', stats.size);
-  res.setHeader('Content-Type', 'application/octet-stream');
-  const stream = fs.createReadStream(filePath);
-  stream.pipe(res);
-});
-
-// 流式上传接口 (Local -> Remote)
-app.post("/upload", checkAuth, (req, res) => {
-  const targetPath = req.query.path;
-  if (!targetPath) return res.status(400).send("Path required");
-  
-  fs.mkdirSync(path.dirname(path.resolve(targetPath)), { recursive: true });
-  const writeStream = fs.createWriteStream(targetPath);
-  
-  req.pipe(writeStream);
-  
-  writeStream.on('finish', () => res.send({ success: true }));
-  writeStream.on('error', (err) => res.status(500).send(err.message));
-});
-
-// 增加基础错误处理器
+// 基础错误处理器
 app.use((err, req, res, next) => {
   if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
     console.error(`[SERVER] JSON Syntax Error: ${err.message}`);
@@ -92,16 +53,19 @@ app.use((err, req, res, next) => {
 // 设置标题
 try { if (process.platform === 'win32') execSync('title Crisis Agent MCP'); } catch (e) {}
 
-const modules = [fileOps, systemOps, clipboardOps, automationOps, sshOps, archiveOps];
+const modules = [fileOps, systemOps, clipboardOps, automationOps, archiveOps];
 const TOOL_DEFINITIONS = 
 [
   ...fileOps.definitions,
   ...systemOps.definitions,
   ...clipboardOps.definitions,
   ...automationOps.definitions,
-  ...sshOps.definitions,
   ...archiveOps.definitions,
-  { name: "get_tool_usage", description: "Get tool usage docs.", inputSchema: { type: "object", properties: { tool_name: { type: "string" } }, required: ["tool_name"] } }
+  { 
+    name: "get_tool_usage", 
+    description: "MANDATORY Discovery Tool. Call this to retrieve the full JSON Schema, detailed descriptions, and safety requirements for any other tool before using it. This is the only way to 'unlock' a tool's parameters.", 
+    inputSchema: { type: "object", properties: { tool_name: { type: "string", description: "The name of the tool you want to research." } }, required: ["tool_name"] } 
+  }
 ];
 
 // 工具激活状态追踪 (Discovery-First Protocol)
@@ -127,12 +91,21 @@ app.post("/call", async (req, res) =>
     if (name === "get_tool_usage")
     {
       const tool = TOOL_DEFINITIONS.find(t => t.name === args.tool_name);
-      if (tool) activatedTools.add(args.tool_name); // 激活该工具的使用权
-      return res.json({ content: [{ type: "text", text: `--- TOOL ACTIVATED ---\nUsage Schema: ${JSON.stringify(tool?.inputSchema, null, 2)}` }] });
+      if (tool) {
+        activatedTools.add(args.tool_name); // 激活该工具的使用权
+        return res.json({ 
+          content: [{ 
+            type: "text", 
+            text: `--- TOOL ACTIVATED ---\nName: ${tool.name}\nDescription: ${tool.description}\nUsage Schema: ${JSON.stringify(tool.inputSchema, null, 2)}` 
+          }] 
+        });
+      } else {
+        return res.json({ isError: true, content: [{ type: "text", text: `Tool '${args.tool_name}' not found.` }] });
+      }
     }
 
-    // 内部维护工具和已激活工具允许执行
-    const isExempt = ["receive_file", "get_tool_usage"].includes(name);
+    // 内部维护工具、环境查询和已激活工具允许执行
+    const isExempt = ["receive_file", "get_tool_usage", "get_env_info"].includes(name);
     if (!isExempt && !activatedTools.has(name)) {
       const lockError = `[PROTOCOL VIOLATION] Tool '${name}' is currently LOCKED. As an expert, you MUST first call 'get_tool_usage' with tool_name='${name}' to retrieve the official schema and safety constraints before you can execute it. Discovery is mandatory.`;
       console.log(`${STYLES.red}${lockError}${STYLES.reset}`);

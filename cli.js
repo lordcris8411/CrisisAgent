@@ -138,7 +138,7 @@ function logToWeb(content, type = 'console_log') {
 function getSystemPrompt() {
   let prompt = fs.existsSync('system.md') ? fs.readFileSync('system.md', 'utf8') : "";
   if (capabilitiesSummary) {
-    prompt += `\n\n### Remote Agent Capabilities:\n${capabilitiesSummary}\n\nIMPORTANT: Use 'delegate_task' for system actions. Pass user instruction exactly as is.`;
+    prompt += `\n\n### System Capabilities (Executor):\n${capabilitiesSummary}\n\nIMPORTANT: Use 'delegate_task' for system actions. Pass user instruction exactly as is.`;
   }
   return prompt;
 }
@@ -167,7 +167,7 @@ async function chat(input, images = [], files = [], imageNames = []) {
     
     // 如果当前轮次包含图片或文件，强制要求委派并明确语义
     if ((images && images.length > 0) || (files && files.length > 0)) {
-      systemPrompt += "\n\nCRITICAL: The current message contains attachments. You MUST use 'delegate_task' to pass this to the Remote Agent. \nWARNING: The user's 'Push' or 'Send' command refers to FILE TRANSFER of these attachments. DO NOT mention git, repositories, or branch checking.";
+      systemPrompt += "\n\nCRITICAL: The current message contains attachments. You MUST use 'delegate_task' to pass this to the Executor for processing. \nWARNING: The user's 'Push' or 'Save' command refers to saving these attachments to the local machine.";
     }
 
     const messages = [{ role: 'system', content: systemPrompt }, ...history.filter(m => m.role !== 'system')];
@@ -350,16 +350,28 @@ async function processInput(line, source = 'terminal', images = [], files = [], 
   }
   else if (input === '/system') {
     const systemContent = getSystemPrompt();
-    let report = `=== SYSTEM PROMPT ===\n${systemContent}\n-----------------------`;
+    let report = `=== SYSTEM PROMPT (CLI) ===\n${systemContent}\n-----------------------`;
     console.log(`${STYLES.cyan}\n${report}${STYLES.reset}`);
     if (source === 'web') logToWeb(report);
     try {
       const probeRes = await fetch(`${CONFIG.CLI_LLM.HOST}/api/generate`, { method: 'POST', body: JSON.stringify({ model: CONFIG.CLI_LLM.MODEL, system: systemContent, prompt: "", stream: false }) });
       const probeData = await probeRes.json();
-      const tokenInfo = `Current System Prompt Cost: ${probeData.prompt_eval_count || 0} Tokens`;
+      const tokenInfo = `Current CLI System Prompt Cost: ${probeData.prompt_eval_count || 0} Tokens`;
       console.log(`${STYLES.green}${tokenInfo}${STYLES.reset}`);
       if (source === 'web') logToWeb(tokenInfo);
     } catch (e) {}
+    broadcast({ type: 'stream_end' });
+  }
+  else if (input === '/exe_system') {
+    try {
+      const res = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/system_prompt`);
+      const data = await res.json();
+      let report = `=== EXECUTOR SYSTEM PROMPT TEMPLATE ===\n${data.template}\n\n=== CACHED ENV CONTEXT ===\n${data.env_context}\n-----------------------`;
+      console.log(`${STYLES.cyan}\n${report}${STYLES.reset}`);
+      if (source === 'web') logToWeb(report);
+    } catch (e) {
+      logToWeb(`Error fetching executor prompt: ${e.message}`);
+    }
     broadcast({ type: 'stream_end' });
   }
   else if (input === '/reboot') {
@@ -381,12 +393,10 @@ async function processInput(line, source = 'terminal', images = [], files = [], 
       `  /context        - 显示当前对话的上下文历史及 Token 消耗详情\n` +
       `  /system         - 查看当前的系统提示词 (System Prompt) 及其 Token 成本\n` +
       `  /skill_debug    - 诊断 Skill 状态，检查依赖的 MCP 原子功能是否缺失\n\n` +
-      `${STYLES.bold}[ 远程与 Skill 管理 (Remote & Skills) ]${STYLES.reset}\n` +
+      `${STYLES.bold}[ 系统与 Skill 管理 (System & Skills) ]${STYLES.reset}\n` +
       `  /list skills             - 列出所有可用 Skill 及其开启/关闭状态\n` +
       `  /list mcp functions      - 列出 Executor 及其关联 MCP Server 的所有底层原子工具\n` +
-      `  /set skill <name> <on/off> - 动态开启或关闭指定的 Skill (例如: /set skill downloader off)\n` +
-      `  /update_mcp              - 触发 MCP 服务器代码同步（将本地修改同步至远程服务器）\n` +
-      `  /pull_scripts            - 从远程服务器拉取最新的脚本或配置\n\n` +
+      `  /set skill <name> <on/off> - 动态开启或关闭指定的 Skill (例如: /set skill downloader off)\n\n` +
       `${STYLES.bold}[ 配置选项 (Configuration) ]${STYLES.reset}\n` +
       `  /set cli_think <on/off>  - 开启/关闭 CLI 层级的思考过程 (CoT) 显示\n` +
       `  /set exec_think <on/off> - 开启/关闭 Executor 层级的思考过程 (CoT) 显示\n\n` +
@@ -415,24 +425,6 @@ async function processInput(line, source = 'terminal', images = [], files = [], 
     } catch (err) { logToWeb(`Skill Debug Error: ${err.message}`); }
     broadcast({ type: 'stream_end' });
   }
-  else if (input === '/update_mcp') {
-    logToWeb(`[CLI] Executing: /update_mcp`);
-    try {
-      const res = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/call`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ skill_name: 'mcp_updater', arguments: { task: "Update remote mcp server." } }) });
-      const skillData = await res.json();
-      logToWeb(`[Update Result]: ${skillData.content?.[0]?.text || "(Done)"}`);
-    } catch (err) { logToWeb(`Update Error: ${err.message}`); }
-    broadcast({ type: 'stream_end' });
-  }
-  else if (input === '/pull_scripts') {
-    logToWeb(`[CLI] Executing: /pull_scripts`);
-    try {
-      const res = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/call`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ skill_name: 'pull_scripts', arguments: { task: "Pull scripts." } }) });
-      const skillData = await res.json();
-      logToWeb(`[Pull Result]: ${skillData.content?.[0]?.text || "(Done)"}`);
-    } catch (err) { logToWeb(`Pull Error: ${err.message}`); }
-    broadcast({ type: 'stream_end' });
-  }
   else if (input === '/list skills') {
     try {
       const res = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`);
@@ -446,7 +438,8 @@ async function processInput(line, source = 'terminal', images = [], files = [], 
     try {
       const res = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/mcp_tools`);
       const data = await res.json();
-      let list = `=== MCP ATOMIC FUNCTIONS ===\n\n[REMOTE]\n` + data.remote.map(t => `- ${t.name}: ${t.description}`).join('\n') + `\n\n[LOCAL]\n` + data.local.map(t => `- ${t.name}: ${t.description}`).join('\n');
+      const allTools = [...(data.remote || []), ...(data.local || [])];
+      let list = `=== MCP ATOMIC FUNCTIONS ===\n\n` + allTools.map(t => `- ${t.name}: ${t.description}`).join('\n');
       console.log(list); if (source === 'web') logToWeb(list);
     } catch(e) {}
     broadcast({ type: 'stream_end' });

@@ -18,9 +18,9 @@ function relayLogToWeb(content) {
   }).catch(() => {}).finally(() => clearTimeout(timeout));
 }
 
-function startProcess(name, script, color)
+function startProcess(name, script, color, dir = '.')
 {
-  const child = spawn('node', [script], { stdio: 'inherit' });
+  const child = spawn('node', [script], { stdio: 'inherit', cwd: dir });
   child.isKilledBySystem = false;
   const msg = `[System] Starting ${name} (${script})...`;
   console.log(`${color}${msg}${STYLES.reset}`);
@@ -73,31 +73,39 @@ function startProcess(name, script, color)
   return child;
 }
 
+let mcpProcess = null;
 let executorProcess = null;
 let cliProcess = null;
+let updaterProcess = null;
 
 async function main()
 {
   // 1. 清理旧进程
-  if (executorProcess) {
-    executorProcess.isKilledBySystem = true;
-    try { executorProcess.kill(); } catch(e) {}
-  }
-  if (cliProcess) {
-    cliProcess.isKilledBySystem = true;
-    try { cliProcess.kill(); } catch(e) {}
-  }
+  if (mcpProcess) { mcpProcess.isKilledBySystem = true; try { mcpProcess.kill(); } catch(e) {} }
+  if (executorProcess) { executorProcess.isKilledBySystem = true; try { executorProcess.kill(); } catch(e) {} }
+  if (cliProcess) { cliProcess.isKilledBySystem = true; try { cliProcess.kill(); } catch(e) {} }
+  if (updaterProcess) { updaterProcess.isKilledBySystem = true; try { updaterProcess.kill(); } catch(e) {} }
 
-  // 1. 启动 Executor
+  // 1. 启动 Update Server
+  updaterProcess = startProcess('Updater', 'updater_server.js', '\x1b[35m');
+
+  // 2. 启动 MCP Server
+  mcpProcess = startProcess('Resource MCP', 'mcp_server.js', '\x1b[32m', 'mcp_server');
+
+  // 2. 给予启动时间
+  console.log(`\x1b[36m[System] Waiting 2s for MCP Server...${STYLES.reset}`);
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  // 3. 启动 Executor
   executorProcess = startProcess('Executor', 'executor_server.js', STYLES.yellow);
 
-  // 2. 给予充足的启动时间
+  // 4. 给予充足的启动时间
   const waitMsg = `[System] Waiting 3s for Executor to be ready...`;
   console.log(`${STYLES.cyan}${waitMsg}${STYLES.reset}`);
   relayLogToWeb(waitMsg);
   await new Promise(resolve => setTimeout(resolve, 3000));
 
-  // 3. 启动 CLI
+  // 5. 启动 CLI
   const launchMsg = `[System] Launching CLI Interface...`;
   console.log(`${STYLES.cyan}${launchMsg}${STYLES.reset}`);
   relayLogToWeb(launchMsg);

@@ -9,10 +9,10 @@ const STYLES = { red: '\x1b[31m', reset: '\x1b[0m' };
 const definitions = 
 [
   { name: "get_screen_resolution", description: "Get the dynamic screen resolution (width and height) of the primary monitor.", inputSchema: { type: "object", properties: {} } },
-  { name: "capture_screen", description: "Capture the remote desktop screen at its current native resolution. Returns a JPEG image.", inputSchema: { type: "object", properties: {} } },
+  { name: "capture_screen", description: "Capture the system desktop screen at its current native resolution. Returns a JPEG image.", inputSchema: { type: "object", properties: {} } },
   { name: "get_current_time", description: "Get system clock time in 'YYYY-MM-DD HH:mm:ss' format.", inputSchema: { type: "object", properties: {} } },
-  { name: "get_system_stats", description: "Get CPU usage, memory usage, and free disk space on the remote machine.", inputSchema: { type: "object", properties: {} } },
-  { name: "get_hardware_info", description: "Get detailed hardware specifications (CPU, RAM, GPU, OS) of the remote machine.", inputSchema: { type: "object", properties: {} } },
+  { name: "get_system_stats", description: "Get CPU usage, memory usage, and free disk space on this machine.", inputSchema: { type: "object", properties: {} } },
+  { name: "get_hardware_info", description: "Get detailed hardware specifications (CPU, RAM, GPU, OS) of this machine.", inputSchema: { type: "object", properties: {} } },
   { name: "get_env_info", description: "Get current system environment information including username and environment variables.", inputSchema: { type: "object", properties: {} } },
   { name: "get_process_list", description: "Get a list of currently running processes with their CPU and memory usage.", inputSchema: { type: "object", properties: { limit: { type: "integer", default: 20 } } } },
   { 
@@ -263,9 +263,9 @@ async function handle(name, args)
         const header = "Name".padEnd(25) + "ID".padEnd(10) + "CPU(s)".padEnd(10) + "Mem(MB)";
         const rows = (Array.isArray(processes) ? processes : [processes]).map(p => 
           `${p.Name.padEnd(25)}${String(p.ID).padEnd(10)}${String(p.CPU).padEnd(10)}${p.MemoryMB}`
-        ).join('\\n');
+        ).join('\n');
         
-        return { content: [{ type: "text", text: `${header}\\n${rows}` }] };
+        return { content: [{ type: "text", text: `${header}\n${rows}` }] };
       }
       catch (e)
       {

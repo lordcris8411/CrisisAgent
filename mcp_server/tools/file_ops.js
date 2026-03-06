@@ -4,20 +4,17 @@ const crypto = require('crypto');
 
 const definitions = 
 [
-  { name: "read_file", description: "Read the content of a text file.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
-  { name: "write_file", description: "Write content to a file (overwrites if exists).", inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } },
-  { name: "append_file", description: "Append content to an existing file.", inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } },
-  { name: "delete_file", description: "Delete a file from the disk.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
-  { name: "move_file", description: "Move a file or folder to a new location.", inputSchema: { type: "object", properties: { source: { type: "string" }, destination: { type: "string" } }, required: ["source", "destination"] } },
-  { name: "rename_file", description: "Rename a file or folder.", inputSchema: { type: "object", properties: { path: { type: "string" }, new_name: { type: "string" } }, required: ["path", "new_name"] } },
-  { name: "list_directory", description: "List files and directories in a path.", inputSchema: { type: "object", properties: { path: { type: "string", default: "." } } } },
-  { name: "list_scripts", description: "List all existing JavaScript files in the 'scripts/' directory.", inputSchema: { type: "object", properties: {} } },
-  { name: "get_file_info", description: "Get detailed metadata of a file (size, creation time, modification time).", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
-  { name: "get_file_hash", description: "Calculate SHA-256 hash of a file to check for integrity or changes.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
-  { name: "download_file", description: "Download a file from a URL to the remote machine.", inputSchema: { type: "object", properties: { url: { type: "string" }, dest_path: { type: "string" } }, required: ["url", "dest_path"] } },
-  { name: "web_fetch", description: "Fetch the text/HTML content of a URL directly. Useful for web scraping or analysis.", inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } },
-  { name: "receive_file", description: "Internal tool for file synchronization (binary support).", inputSchema: { type: "object", properties: { path: { type: "string" }, base64_content: { type: "string" } }, required: ["path", "base64_content"] } },
-  { name: "pull_file", description: "Read any file as base64 for downloading from remote to local.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } }
+  { name: "read_file", description: "Read the full text content of a file on the system. Supports UTF-8 encoding. Use for reading source code, logs, or configuration files.", inputSchema: { type: "object", properties: { path: { type: "string", description: "Absolute or relative path to the file." } }, required: ["path"] } },
+  { name: "write_file", description: "Create a new file or overwrite an existing one with text content on the system. Automatically creates parent directories if they don't exist.", inputSchema: { type: "object", properties: { path: { type: "string", description: "Path where the file should be saved." }, content: { type: "string", description: "Text content to write." } }, required: ["path", "content"] } },
+  { name: "append_file", description: "Append text content to the end of an existing file on the system without overwriting it.", inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } },
+  { name: "delete_file", description: "Permanently delete a file from the disk. Use with caution.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+  { name: "move_file", description: "Move a file or folder to a new location on the system.", inputSchema: { type: "object", properties: { source: { type: "string" }, destination: { type: "string" } }, required: ["source", "destination"] } },
+  { name: "rename_file", description: "Change the name of a file or folder in its current directory.", inputSchema: { type: "object", properties: { path: { type: "string" }, new_name: { type: "string", description: "The new filename only, not the full path." } }, required: ["path", "new_name"] } },
+  { name: "list_directory", description: "List all files and subdirectories within a specified path on the system. Defaults to the current working directory if no path is provided.", inputSchema: { type: "object", properties: { path: { type: "string", default: ".", description: "The directory to list." } } } },
+  { name: "list_scripts", description: "Specialized tool to list all available JavaScript automation scripts in the 'mcp_server/scripts/' directory along with their metadata.", inputSchema: { type: "object", properties: {} } },
+  { name: "get_file_info", description: "Retrieve detailed metadata for a file or directory on the system, including size (in bytes), creation time, and last modification time.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+  { name: "get_file_hash", description: "Calculate the SHA-256 hash of a file. Essential for verifying file integrity or detecting changes.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+  { name: "web_fetch", description: "Perform an HTTP GET request to fetch content from a URL. Useful for analysis, web scraping, or API debugging.", inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } }
 ];
 
 async function handle(name, args)
@@ -43,32 +40,6 @@ async function handle(name, args)
       const hashSum = crypto.createHash('sha256');
       hashSum.update(fileBuffer);
       return { content: [{ type: "text", text: hashSum.digest('hex') }] };
-    }
-
-    case "download_file":
-    {
-      return new Promise((resolve) => {
-        const url = require('url');
-        const http = args.url.startsWith('https') ? require('https') : require('http');
-        
-        fs.mkdirSync(path.dirname(path.resolve(args.dest_path)), { recursive: true });
-        const file = fs.createWriteStream(args.dest_path);
-        
-        http.get(args.url, (response) => {
-          if (response.statusCode !== 200) {
-            resolve({ isError: true, content: [{ type: "text", text: `Download failed: Status ${response.statusCode}` }] });
-            return;
-          }
-          response.pipe(file);
-          file.on('finish', () => {
-            file.close();
-            resolve({ content: [{ type: "text", text: `Downloaded successfully to ${args.dest_path}` }] });
-          });
-        }).on('error', (err) => {
-          fs.unlink(args.dest_path, () => {});
-          resolve({ isError: true, content: [{ type: "text", text: `Download error: ${err.message}` }] });
-        });
-      });
     }
 
     case "read_file":
@@ -159,17 +130,6 @@ async function handle(name, args)
         });
       });
     }
-
-    case "receive_file":
-      const buffer = Buffer.from(args.base64_content, 'base64');
-      const fullPath = path.resolve(args.path);
-      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-      fs.writeFileSync(fullPath, buffer);
-      return { content: [{ type: "text", text: `Saved ${fullPath}` }] };
-
-    case "pull_file":
-      const fBuf = fs.readFileSync(args.path);
-      return { content: [{ type: "text", text: `BASE64_DATA:${fBuf.toString('base64')}` }] };
   }
 }
 

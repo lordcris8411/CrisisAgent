@@ -1,15 +1,16 @@
 {
   "CLI_LLM": {
-    "HOST": "http://172.16.1.20:12434",
+    "HOST": "http://localhost:11434",
     "MODEL": "qwen3.5:35b-a3b"
   },
   "EXECUTOR_LLM": {
-    "HOST": "http://172.16.1.20:12434",
+    "HOST": "http://localhost:11434",
     "MODEL": "qwen3.5:35b-a3b"
   },
-  "RESOURCE_MCP_URL": "http://172.16.1.99:3000",
+  "RESOURCE_MCP_URL": "http://localhost:3000",
   "AUTH_TOKEN": "CRISIS_AGENT_SECURE_TOKEN_2026",
   "EXECUTOR_PORT": 3001,
-  "CLI_THINK": false,
+  "UPDATER_PORT": 3003,
+  "CLI_THINK": true,
   "EXECUTOR_THINK": false
 }

@@ -1,6 +1,6 @@
 {
   "name": "env_analyst",
-  "description": "Get current system environment information including OS name, version, username, and environment variables.",
+  "description": "Get current system environment information including OS name, version, username, and environment variables on the local machine.",
   "use": [
     "get_env_info"
   ],

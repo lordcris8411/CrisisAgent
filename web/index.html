@@ -24,7 +24,7 @@
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { 
             background: rgba(255, 255, 255, 0.05); 
-            border-radius: 10px; 
+            border-radius: 0; 
             transition: background 0.3s;
         }
         *:hover::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); }
@@ -49,7 +49,7 @@
 
         .brand { font-size: 1.2rem; font-weight: 600; color: var(--accent-main); margin-bottom: 30px; letter-spacing: 2px; }
 
-        .stats-card { background: rgba(255,255,255,0.01); border-radius: 8px; padding: 15px; margin-bottom: 20px; border: 1px solid var(--border); }
+        .stats-card { background: rgba(255,255,255,0.01); border-radius: 0; padding: 15px; margin-bottom: 20px; border: 1px solid var(--border); }
         .stat-item { font-size: 0.85rem; margin-bottom: 8px; color: var(--text-dim); }
         .stat-value { color: var(--text-main); font-weight: 500; }
 
@@ -86,21 +86,21 @@
             position: absolute; cursor: pointer;
             top: 0; left: 0; right: 0; bottom: 0;
             background-color: #1e293b;
-            transition: .4s; border-radius: 20px;
+            transition: .4s; border-radius: 0;
         }
         .slider:before {
             position: absolute; content: "";
             height: 14px; width: 14px;
             left: 3px; bottom: 3px;
             background-color: #64748b;
-            transition: .4s; border-radius: 50%;
+            transition: .4s; border-radius: 0;
         }
         input:checked + .slider { background-color: var(--accent-main); }
         input:checked + .slider:before { transform: translateX(14px); background-color: #fff; }
 
         .action-btn {
             background: transparent; border: 1px solid var(--border);
-            color: var(--text-main); padding: 10px; border-radius: 6px;
+            color: var(--text-main); padding: 10px; border-radius: 0;
             cursor: pointer; text-align: left; margin-bottom: 10px;
             transition: all 0.2s; font-size: 0.9rem;
         }
@@ -139,11 +139,11 @@
 
         .content { line-height: 1.6; }
         .content p { margin: 0 0 1em 0; }
-        .content code { background: var(--bg-code); padding: 2px 5px; border-radius: 4px; font-family: monospace; font-size: 0.9em; }
+        .content code { background: var(--bg-code); padding: 2px 5px; border-radius: 0; font-family: monospace; font-size: 0.9em; }
         
         .code-container {
             background: var(--bg-code);
-            border-radius: 8px;
+            border-radius: 0;
             margin: 15px 0;
             border: 1px solid var(--border);
             overflow: hidden;
@@ -161,7 +161,7 @@
         }
         .copy-btn {
             background: transparent; border: 1px solid var(--border);
-            color: var(--text-dim); padding: 2px 8px; border-radius: 4px;
+            color: var(--text-dim); padding: 2px 8px; border-radius: 0;
             cursor: pointer; font-size: 0.7rem; transition: all 0.2s;
         }
         .copy-btn:hover { color: var(--accent-main); border-color: var(--accent-main); }
@@ -173,12 +173,50 @@
         .content th { background: rgba(255,255,255,0.01); }
         .content ul, .content ol { padding-left: 20px; margin-bottom: 1em; }
 
-        .thought-block { background: var(--bg-thought); border-left: 2px solid var(--accent-main); padding: 15px; margin: 10px 0; color: var(--text-dim); font-size: 0.9rem; white-space: pre-wrap; border-radius: 0 4px 4px 0; opacity: 0.7; }
+        .thought-block { background: var(--bg-thought); border-left: 2px solid var(--accent-main); padding: 15px; margin: 10px 0; color: var(--text-dim); font-size: 0.9rem; white-space: pre-wrap; border-radius: 0; opacity: 0.7; }
+        
+        /* 合并后的日志样式 */
+        .log-wrapper {
+            margin: 15px 0;
+            border: 1px solid var(--border);
+            border-radius: 0;
+            overflow: hidden;
+            background: rgba(255,255,255,0.01);
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .log-header {
+            padding: 8px 15px;
+            background: rgba(255,255,255,0.02);
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border-bottom: 1px solid transparent;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .log-header:hover { background: rgba(255,255,255,0.05); color: var(--accent-main); }
+        .log-toggle { font-size: 0.6rem; width: 12px; color: var(--accent-main); }
+        .log-content {
+            padding: 15px;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 0.9rem;
+            color: #64748b;
+            white-space: pre-wrap;
+            word-break: break-all;
+            line-height: 1.6;
+            background: rgba(0,0,0,0.1);
+        }
+
         .log-line { font-family: monospace; font-size: 0.8rem; color: #475569; margin: 4px 0; padding-left: 10px; border-left: 1px solid #1e293b; white-space: pre-wrap; }
         .log-stream-container { font-family: monospace; font-size: 0.8rem; color: #64748b; margin: 4px 0; padding-left: 10px; border-left: 1px solid var(--accent-main); white-space: pre-wrap; }
 
         .captured-image {
-            max-width: 240px; max-height: 240px; width: auto; height: auto; border-radius: 8px; margin: 10px 0; border: 1px solid var(--border); cursor: zoom-in; transition: transform 0.2s; object-fit: contain;
+            max-width: 240px; max-height: 240px; width: auto; height: auto; border-radius: 0; margin: 10px 0; border: 1px solid var(--border); cursor: zoom-in; transition: transform 0.2s; object-fit: contain;
         }
         .captured-image:hover { transform: scale(1.01); }
 
@@ -188,7 +226,7 @@
             display: none; justify-content: center; align-items: center;
             z-index: 2000; cursor: zoom-out;
         }
-        #lightbox img { max-width: 95%; max-height: 95%; border: 2px solid var(--border); border-radius: 4px; }
+        #lightbox img { max-width: 95%; max-height: 95%; border: 2px solid var(--border); border-radius: 0; }
 
         #input-container { 
             padding: 20px; 
@@ -204,7 +242,7 @@
             position: relative;
         }
 
-        .input-wrapper { background: #16181d; border-radius: 12px; padding: 10px 15px; display: flex; border: 1px solid var(--border); align-items: center; gap: 10px; }
+        .input-wrapper { background: #16181d; border-radius: 0; padding: 10px 15px; display: flex; border: 1px solid var(--border); align-items: center; gap: 10px; }
         #prompt-input { background: transparent; border: none; color: var(--text-main); flex: 1; outline: none; font-size: 1rem; padding: 0 10px; }
         
         .think-toggle-container {
@@ -212,7 +250,7 @@
             padding-right: 10px; border-right: 1px solid var(--border);
         }
 
-        #send-btn { background: #334155; color: white; border: none; padding: 8px 15px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+        #send-btn { background: #334155; color: white; border: none; padding: 8px 15px; border-radius: 0; font-weight: 600; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
         #send-btn.stop { background: #7f1d1d; }
         
         .upload-btn { background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 1.2rem; padding: 5px; transition: color 0.2s; display: flex; align-items: center; }
@@ -223,13 +261,13 @@
             border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
             position: relative; align-items: center; gap: 15px;
         }
-        #image-preview { width: 64px; height: 64px; border-radius: 8px; border: 1px solid var(--border); object-fit: cover; }
-        #file-icon { font-size: 1.5rem; width: 64px; height: 64px; display: flex; justify-content: center; align-items: center; background: rgba(255,255,255,0.02); border-radius: 8px; border: 1px solid var(--border); }
+        #image-preview { width: 64px; height: 64px; border-radius: 0; border: 1px solid var(--border); object-fit: cover; }
+        #file-icon { font-size: 1.5rem; width: 64px; height: 64px; display: flex; justify-content: center; align-items: center; background: rgba(255,255,255,0.02); border-radius: 0; border: 1px solid var(--border); }
         #file-meta { font-size: 0.85rem; color: var(--text-dim); font-family: 'Inter', sans-serif; }
         
         .remove-img { 
             position: absolute; top: -8px; right: -8px; background: #1e293b; color: #94a3b8; 
-            border-radius: 50%; width: 22px; height: 22px; display: flex; justify-content: center; align-items: center; 
+            border-radius: 0; width: 22px; height: 22px; display: flex; justify-content: center; align-items: center; 
             cursor: pointer; border: none; box-shadow: 0 4px 10px rgba(0,0,0,0.4); transition: none !important; z-index: 10; padding: 0;
         }
         .remove-img:hover { background: #7f1d1d; color: white; }
@@ -244,7 +282,7 @@
         .loader {
             width: 50px; height: 50px;
             border: 3px solid #1e293b; border-top: 3px solid var(--accent-main);
-            border-radius: 50%; animation: spin 1.2s linear infinite;
+            border-radius: 0; animation: spin 1.2s linear infinite;
             margin-bottom: 20px;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -270,7 +308,7 @@
         #suggestions {
             position: absolute; bottom: 85px; left: 0; right: 0;
             background: var(--bg-sidebar); border: 1px solid var(--border);
-            border-radius: 12px; box-shadow: 0 -10px 25px rgba(0,0,0,0.5);
+            border-radius: 0; box-shadow: 0 -10px 25px rgba(0,0,0,0.5);
             display: none; z-index: 1000; max-height: 300px; overflow-y: auto;
         }
         .suggestion-item {
@@ -302,7 +340,7 @@
             <button class="action-btn" onclick="sendCommand('/reset')">🔄 Reset Session</button>
             <button class="action-btn" onclick="sendCommand('/reboot')">🔌 Reboot System</button>
             <div id="skill-manager">
-                <div class="skill-section-title">Remote Skills</div>
+                <div class="skill-section-title">System Skills</div>
                 <div id="skill-list"></div>
             </div>
         </div>
@@ -391,8 +429,6 @@
             { name: '/skill_debug', desc: 'Debug routing' },
             { name: '/list skills', desc: 'List skills' },
             { name: '/list mcp functions', desc: 'List MCP tools' },
-            { name: '/update_mcp', desc: 'Sync code to remote' },
-            { name: '/pull_scripts', desc: 'Download remote scripts' },
             { name: '/reboot', desc: 'Restart system' },
             { name: '/set cli_think on', desc: 'Enable CLI CoT' },
             { name: '/set cli_think off', desc: 'Disable CLI CoT' },
@@ -488,27 +524,61 @@
                     const cliToggle = document.getElementById('cli-think-toggle');
                     if (cliToggle) cliToggle.checked = data.cli_think;
                 }
-                else if (data.type === 'console_log') {
+                else if (data.type === 'console_log' || data.type === 'console_log_stream') {
+                    const isStream = data.type === 'console_log_stream';
                     const cleanText = data.content.replace(/\x1b\[[0-9;]*m/g, '');
                     if (!cleanText.trim()) return;
-                    const wrapper = document.createElement('div'); wrapper.className = 'message-container';
-                    const div = document.createElement('div'); div.className = 'log-line'; div.innerText = cleanText;
-                    wrapper.appendChild(div);
-                    chatHistory.appendChild(wrapper); last_div = null; chatHistory.scrollTop = chatHistory.scrollHeight;
-                }
-                else if (data.type === 'console_log_stream') {
-                    const cleanText = data.content.replace(/\x1b\[[0-9;]*m/g, '');
-                    if (!last_div || !last_div.classList.contains('log-stream-wrapper')) {
-                        if (!cleanText.trim()) return;
-                        const wrapper = document.createElement('div'); wrapper.className = 'message-container log-stream-wrapper';
-                        const div = document.createElement('div'); div.className = 'log-stream-container'; div.innerText = cleanText;
-                        wrapper.appendChild(div);
-                        chatHistory.appendChild(wrapper); last_div = wrapper;
-                    } else { 
-                        last_div.querySelector('.log-stream-container').innerText += cleanText; 
+
+                    // 处理加粗和转义的辅助函数
+                    const processLogText = (txt) => {
+                        const escaped = txt.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        // 匹配 [Tool Result] 及其后的所有内容并加粗
+                        return escaped.replace(/(\[Tool Result\].*)/g, '<strong style="color:var(--accent-main);filter:brightness(1.2);">$1</strong>');
+                    };
+
+                    // 检查上一个元素是否是日志容器
+                    if (last_div && last_div.querySelector('.log-wrapper')) {
+                        const content = last_div.querySelector('.log-content');
+                        
+                        if (data.type === 'console_log' && content.innerHTML.length > 0) {
+                            content.innerHTML += '\n';
+                        }
+                        
+                        content.innerHTML += processLogText(cleanText);
+                        last_div.dataset.lastLogType = data.type;
+                    } else {
+                        const container = document.createElement('div');
+                        container.className = 'message-container';
+
+                        const wrapper = document.createElement('div');
+                        wrapper.className = 'log-wrapper';
+
+                        const header = document.createElement('div');
+                        header.className = 'log-header';
+                        const defaultCollapsed = isStream;
+                        header.innerHTML = `<span class="log-toggle">${defaultCollapsed ? '▶' : '▼'}</span> <span class="log-label">Executor output</span>`;
+
+                        const content = document.createElement('div');
+                        content.className = 'log-content';
+                        content.style.display = defaultCollapsed ? 'none' : 'block';
+                        content.innerHTML = processLogText(cleanText);
+
+                        header.onclick = () => {
+                            const isHidden = content.style.display === 'none';
+                            content.style.display = isHidden ? 'block' : 'none';
+                            header.querySelector('.log-toggle').innerText = isHidden ? '▼' : '▶';
+                        };
+
+                        wrapper.appendChild(header);
+                        wrapper.appendChild(content);
+                        container.appendChild(wrapper);
+                        chatHistory.appendChild(container);
+                        last_div = container;
+                        last_div.dataset.lastLogType = data.type;
                     }
                     chatHistory.scrollTop = chatHistory.scrollHeight;
-                }                else if (data.type === 'stream_start') { currentAssistantMsg = null; currentRawContent = ""; last_div = null; setGenerating(true); } 
+                }
+                else if (data.type === 'stream_start') { currentAssistantMsg = null; currentRawContent = ""; last_div = null; setGenerating(true); } 
                 else if (data.type === 'stream_end') { currentAssistantMsg = null; currentRawContent = ""; setGenerating(false); } 
                 else if (data.type === 'stream_chunk') {
                     if (!currentAssistantMsg) { 
@@ -601,7 +671,7 @@
             if (msg.files && msg.files.length > 0) {
                 msg.files.forEach(f => {
                     const fDiv = document.createElement('div');
-                    fDiv.style.cssText = "background: rgba(100,116,139,0.1); border: 1px solid var(--accent-main); padding: 8px; border-radius: 6px; font-family: monospace; font-size: 0.8rem; margin: 5px 0; color: var(--accent-main);";
+                    fDiv.style.cssText = "background: rgba(100,116,139,0.1); border: 1px solid var(--accent-main); padding: 8px; border-radius: 0; font-family: monospace; font-size: 0.8rem; margin: 5px 0; color: var(--accent-main);";
                     fDiv.innerText = `📎 Attached File: ${f.name}`;
                     el.querySelector('.content').appendChild(fDiv);
                 });

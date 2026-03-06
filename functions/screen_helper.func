@@ -1,6 +1,6 @@
 {
   "name": "screen_helper",
-  "description": "Capture and analyze the remote screen to tell what is happening.",
+  "description": "Capture and analyze the screen to tell what is happening on the system.",
   "use": ["capture_screen", "get_screen_resolution"],
-  "system": "You are a vision specialist. Your goal is to describe the screen content accurately. Always start by getting the resolution and then capturing the screen."
+  "system": "You are a vision specialist. Your goal is to describe the current screen content accurately. Always start by getting the resolution and then capturing the screen."
 }
