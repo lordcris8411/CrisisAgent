@@ -189,6 +189,7 @@
             padding: 8px 15px;
             background: rgba(255,255,255,0.02);
             font-size: 0.75rem;
+            font-weight: bold;
             color: var(--text-dim);
             cursor: pointer;
             user-select: none;
@@ -201,10 +202,19 @@
         }
         .log-header:hover { background: rgba(255,255,255,0.05); color: var(--accent-main); }
         .log-toggle { font-size: 0.6rem; width: 12px; color: var(--accent-main); }
+        .log-status { margin-left: auto; display: flex; align-items: center; }
+        .spinner-micro {
+            width: 8px; height: 8px;
+            border: 2px solid rgba(100, 116, 139, 0.2);
+            border-top-color: var(--accent-main);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
         .log-content {
             padding: 15px;
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            font-size: 0.9rem;
+            font-size: 0.8rem;
             color: #64748b;
             white-space: pre-wrap;
             word-break: break-all;
@@ -539,6 +549,10 @@
                     // 检查上一个元素是否是日志容器
                     if (last_div && last_div.querySelector('.log-wrapper')) {
                         const content = last_div.querySelector('.log-content');
+                        const status = last_div.querySelector('.log-status');
+                        
+                        // 显示 loading
+                        if (status) status.innerHTML = '<div class="spinner-micro"></div>';
                         
                         if (data.type === 'console_log' && content.innerHTML.length > 0) {
                             content.innerHTML += '\n';
@@ -555,12 +569,13 @@
 
                         const header = document.createElement('div');
                         header.className = 'log-header';
-                        const defaultCollapsed = isStream;
-                        header.innerHTML = `<span class="log-toggle">${defaultCollapsed ? '▶' : '▼'}</span> <span class="log-label">Executor output</span>`;
+                        // 强制默认折叠
+                        const defaultCollapsed = true;
+                        header.innerHTML = `<span class="log-toggle">▶</span> <span class="log-label">Executor output</span><div class="log-status"><div class="spinner-micro"></div></div>`;
 
                         const content = document.createElement('div');
                         content.className = 'log-content';
-                        content.style.display = defaultCollapsed ? 'none' : 'block';
+                        content.style.display = 'none'; // 初始折叠
                         content.innerHTML = processLogText(cleanText);
 
                         header.onclick = () => {
@@ -578,8 +593,14 @@
                     }
                     chatHistory.scrollTop = chatHistory.scrollHeight;
                 }
-                else if (data.type === 'stream_start') { currentAssistantMsg = null; currentRawContent = ""; last_div = null; setGenerating(true); } 
-                else if (data.type === 'stream_end') { currentAssistantMsg = null; currentRawContent = ""; setGenerating(false); } 
+                else if (data.type === 'stream_start') { 
+                    currentAssistantMsg = null; currentRawContent = ""; last_div = null; setGenerating(true); 
+                } 
+                else if (data.type === 'stream_end') { 
+                    currentAssistantMsg = null; currentRawContent = ""; setGenerating(false); 
+                    // 移除所有日志容器中的 spinner
+                    document.querySelectorAll('.log-status').forEach(s => s.innerHTML = '');
+                } 
                 else if (data.type === 'stream_chunk') {
                     if (!currentAssistantMsg) { 
                         const wrapper = document.createElement('div');
