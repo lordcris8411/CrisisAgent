@@ -220,7 +220,7 @@ async function runStatelessLLM(skill, userInstruction, images = [], files = [])
     expertSystemPrompt += `\n\n### CURRENT SYSTEM ENVIRONMENT CONTEXT\n${cachedEnvInfo}`;
   } catch (e) {
     // 降级方案
-    expertSystemPrompt = `${skill.system}\n\n### CURRENT SYSTEM ENVIRONMENT CONTEXT\n${cachedEnvInfo}\n\n### MANDATORY ARCHITECTURAL PROTOCOL\n1. TOOL DISCOVERY: To minimize errors, tool parameters are HIDDEN by default. \n2. RESEARCH REQUIREMENT: You MUST call 'get_tool_usage' for any tool you wish to use. This will return the correct JSON Schema.\n3. ZERO GUESSING: Do not attempt to guess parameters. If you call a tool with incorrect or guessed arguments, the system will reject it.`;
+    expertSystemPrompt = `${skill.system}\n\n### CURRENT SYSTEM ENVIRONMENT CONTEXT\n${cachedEnvInfo}\n\n### MANDATORY ARCHITECTURAL PROTOCOL\n1. TOOL DISCOVERY: To minimize errors, tool parameters are HIDDEN by default. \n2. RESEARCH REQUIREMENT: You MUST call 'get_tool_usage' for any tool you wish to use. This will return the correct JSON Schema.\n3. ZERO GUESSING: Do not attempt to guess parameters. If you call a tool with incorrect or guessed arguments, the system will reject it.\n4. RESILIENCE: If a tool call is BLOCKED or rejected, DO NOT give up. Read the returned hint and RETRY immediately.`;
   }
 
   let userMsg = { role: 'user', content: userInstruction };
