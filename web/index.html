@@ -221,9 +221,10 @@
             border: 1px solid var(--border);
             padding: 12px 18px;
             display: inline-block;
-            max-width: 85%;
+            width: 90%;
             border-radius: 0;
             text-align: left;
+            box-sizing: border-box;
         }
         
         .thought-block { 
@@ -236,7 +237,8 @@
             white-space: pre-wrap; 
             border-radius: 0; 
             opacity: 0.7;
-            max-width: 85%;
+            width: 90%;
+            box-sizing: border-box;
         }
         .role-assistant .thought-block { border-left: none; border-right: 2px solid var(--accent-main); text-align: left; }
         
@@ -301,8 +303,7 @@
             border-radius: 0;
             overflow: hidden;
             background: rgba(255,255,255,0.01);
-            max-width: 85%;
-            width: fit-content;
+            width: 90%;
             min-width: 300px;
             box-sizing: border-box;
         }
