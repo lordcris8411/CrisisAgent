@@ -411,6 +411,49 @@
         .suggestion-item.active .cmd-name { color: var(--accent-main); }
         .suggestion-item .cmd-name { font-weight: 600; font-family: monospace; color: var(--text-main); }
         .suggestion-item .cmd-desc { font-size: 0.8rem; color: var(--text-dim); opacity: 0.8; }
+
+        /* 全能预览窗口样式 */
+        #preview-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(13, 15, 18, 0.95);
+            display: none; justify-content: center; align-items: center;
+            z-index: 5000; backdrop-filter: blur(10px);
+        }
+        #preview-window {
+            width: 90%; height: 85%; max-width: 1200px;
+            background: var(--bg-sidebar); border: 1px solid var(--border);
+            display: flex; flex-direction: column; position: relative;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+        #preview-header {
+            padding: 12px 20px; background: rgba(255,255,255,0.02);
+            border-bottom: 1px solid var(--border);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        #preview-title { font-size: 0.85rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
+        #preview-body { flex: 1; overflow: auto; padding: 20px; display: flex; justify-content: center; align-items: center; background: #000; }
+        #preview-body pre { width: 100%; height: 100%; margin: 0; background: transparent; border: none; font-size: 0.9rem; }
+        
+        .preview-close { background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 1.2rem; }
+        .preview-close:hover { color: var(--file-pdf); }
+
+        .preview-btn { 
+            background: rgba(255,255,255,0.05); border: 1px solid var(--border); 
+            color: var(--text-main); padding: 4px 10px; font-size: 0.7rem; 
+            cursor: pointer; transition: all 0.2s;
+        }
+        .preview-btn:hover { background: var(--accent-main); color: white; }
+
+        /* 链接旁的预览按钮 */
+        .quick-preview-trigger {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 20px; height: 20px; margin-left: 8px;
+            background: rgba(96, 165, 250, 0.1); color: #60a5fa;
+            border-radius: 4px; cursor: pointer; transition: all 0.2s;
+            vertical-align: middle; border: 1px solid rgba(96, 165, 250, 0.2);
+        }
+        .quick-preview-trigger:hover { background: #60a5fa; color: white; transform: scale(1.1); }
+        .quick-preview-trigger svg { width: 12px; height: 12px; stroke-width: 2.5px; }
     </style>
 </head>
 <body>
@@ -554,6 +597,40 @@
 
     <div id="lightbox" onclick="this.style.display='none'"><img src="" alt="Preview"></div>
 
+    <!-- 全能预览窗口 -->
+    <div id="preview-overlay">
+        <div id="preview-window">
+            <div id="preview-header">
+                <span id="preview-title">File Preview</span>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <div id="media-controls" style="display: none; gap: 10px;">
+                        <button class="preview-btn" onclick="adjustSpeed(-0.25)">-0.25x</button>
+                        <span id="current-speed" style="font-size: 0.75rem; color: var(--accent-main); min-width: 40px; text-align: center;">1.0x</span>
+                        <button class="preview-btn" onclick="adjustSpeed(0.25)">+0.25x</button>
+                    </div>
+                    <div id="image-controls" style="display: none; gap: 10px; align-items: center;">
+                        <button class="preview-btn" onclick="adjustZoom(1.2)">🔍 +</button>
+                        <button class="preview-btn" onclick="adjustZoom(0.8)">🔍 -</button>
+                        <button class="preview-btn" onclick="resetImageTransform()">Reset</button>
+                        <span id="zoom-level" style="font-size: 0.75rem; color: var(--accent-main); min-width: 40px; text-align: center;">100%</span>
+                    </div>
+                    <button class="preview-close" onclick="closePreview()">✕</button>
+                </div>
+            </div>
+            <div id="preview-body" style="overflow: hidden;">
+                <!-- 动态内容区域 -->
+                <pre id="code-preview" style="display: none; overflow: auto; width: 100%; height: 100%;"><code class="hljs"></code></pre>
+                <div id="image-viewport" style="display: none; width: 100%; height: 100%; cursor: grab; overflow: hidden; position: relative;">
+                    <img id="image-preview-full" style="max-width: 100%; max-height: 100%; object-fit: contain; position: absolute; transition: transform 0.1s ease-out; pointer-events: none;">
+                </div>
+                <iframe id="pdf-preview" style="display: none; width: 100%; height: 100%; border: none;"></iframe>
+                <video id="video-preview" controls style="display: none; width: 100%; max-height: 100%;"></video>
+                <audio id="audio-preview" controls style="display: none; width: 80%;"></audio>
+                <div id="preview-loader" style="display: none;"><div class="spinner-micro" style="width: 20px; height: 20px;"></div></div>
+            </div>
+        </div>
+    </div>
+
     <script>
         const chatHistory = document.getElementById('chat-history');
         const promptInput = document.getElementById('prompt-input');
@@ -645,6 +722,14 @@
         };
 
         const renderer = new marked.Renderer();
+        
+        // 增强链接渲染，添加预览按钮
+        renderer.link = function(args) {
+            const href = typeof args === 'object' ? args.href : args;
+            const text = typeof args === 'object' ? args.text : arguments[1];
+            return `<a href="${href}" target="_blank">${text}</a><span class="quick-preview-trigger" onclick="openPreview('${href}')" title="Quick Preview"><i data-lucide="eye"></i></span>`;
+        };
+
         renderer.code = function(args) {
             const code = typeof args === 'object' ? args.text : args;
             const lang = (typeof args === 'object' ? args.lang : arguments[1]) || 'plaintext';
@@ -653,6 +738,154 @@
             return `<div class="code-container"><div class="code-header"><span>${lang}</span><button class="copy-btn" onclick="copyToClipboard(this)">Copy</button></div><pre><code class="hljs language-${lang}">${highlighted}</code></pre></div>`;
         };
         marked.setOptions({ renderer });
+
+        // 预览系统逻辑
+        const previewOverlay = document.getElementById('preview-overlay');
+        const codePreview = document.getElementById('code-preview');
+        const videoPreview = document.getElementById('video-preview');
+        const audioPreview = document.getElementById('audio-preview');
+        const pdfPreview = document.getElementById('pdf-preview');
+        const imageViewport = document.getElementById('image-viewport');
+        const imagePreviewFull = document.getElementById('image-preview-full');
+        const previewLoader = document.getElementById('preview-loader');
+        const previewTitle = document.getElementById('preview-title');
+        const mediaControls = document.getElementById('media-controls');
+        const imageControls = document.getElementById('image-controls');
+        const currentSpeedEl = document.getElementById('current-speed');
+        const zoomLevelEl = document.getElementById('zoom-level');
+
+        let imgScale = 1;
+        let imgOffsetX = 0;
+        let imgOffsetY = 0;
+        let isDraggingImg = false;
+        let startX, startY;
+
+        async function openPreview(url) {
+            let pathPart = url;
+            let previewUrl = url;
+            
+            try {
+                const urlObj = new URL(url, window.location.origin);
+                if (urlObj.pathname.includes('/download')) {
+                    pathPart = urlObj.searchParams.get('path') || '';
+                    // 核心修复：为预览请求添加 view=1 参数，防止强制下载
+                    urlObj.searchParams.set('view', '1');
+                    previewUrl = urlObj.toString();
+                }
+                else pathPart = urlObj.pathname;
+            } catch(e) {}
+            
+            const ext = pathPart.split('.').pop().toLowerCase();
+            previewOverlay.style.display = 'flex';
+            previewLoader.style.display = 'block';
+            codePreview.style.display = 'none';
+            videoPreview.style.display = 'none';
+            audioPreview.style.display = 'none';
+            pdfPreview.style.display = 'none';
+            imageViewport.style.display = 'none';
+            mediaControls.style.display = 'none';
+            imageControls.style.display = 'none';
+            previewTitle.innerText = `Previewing: ${pathPart.split(/[\\/]/).pop()}`;
+
+            const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext);
+            const isVideo = ['mp4', 'webm', 'ogg', 'mov'].includes(ext);
+            const isAudio = ['mp3', 'wav', 'aac', 'flac'].includes(ext);
+            const isPDF = ext === 'pdf';
+
+            if (isImage) {
+                resetImageTransform();
+                imagePreviewFull.src = previewUrl;
+                imageViewport.style.display = 'flex';
+                imageViewport.style.justifyContent = 'center';
+                imageViewport.style.alignItems = 'center';
+                imageControls.style.display = 'flex';
+                previewLoader.style.display = 'none';
+            } else if (isPDF) {
+                pdfPreview.src = previewUrl;
+                pdfPreview.style.display = 'block';
+                previewLoader.style.display = 'none';
+            } else if (isVideo) {
+                videoPreview.src = previewUrl; videoPreview.style.display = 'block';
+                mediaControls.style.display = 'flex'; previewLoader.style.display = 'none';
+                videoPreview.play();
+            } else if (isAudio) {
+                audioPreview.src = previewUrl; audioPreview.style.display = 'block';
+                mediaControls.style.display = 'flex'; previewLoader.style.display = 'none';
+                audioPreview.play();
+            } else {
+                try {
+                    const res = await fetch(previewUrl);
+                    const text = await res.text();
+                    codePreview.querySelector('code').textContent = text;
+                    codePreview.style.display = 'block';
+                    hljs.highlightElement(codePreview.querySelector('code'));
+                } catch (e) {
+                    codePreview.querySelector('code').textContent = `Unable to preview content: ${e.message}`;
+                    codePreview.style.display = 'block';
+                }
+                previewLoader.style.display = 'none';
+            }
+            lucide.createIcons();
+        }
+
+        // 图片变换逻辑
+        function updateImageTransform() {
+            imagePreviewFull.style.transform = `translate(${imgOffsetX}px, ${imgOffsetY}px) scale(${imgScale})`;
+            zoomLevelEl.innerText = `${Math.round(imgScale * 100)}%`;
+        }
+
+        function resetImageTransform() {
+            imgScale = 1; imgOffsetX = 0; imgOffsetY = 0;
+            updateImageTransform();
+        }
+
+        function adjustZoom(factor) {
+            imgScale *= factor;
+            imgScale = Math.max(0.1, Math.min(10, imgScale));
+            updateImageTransform();
+        }
+
+        imageViewport.onwheel = (e) => {
+            e.preventDefault();
+            const delta = e.deltaY > 0 ? 0.9 : 1.1;
+            adjustZoom(delta);
+        };
+
+        imageViewport.onmousedown = (e) => {
+            isDraggingImg = true;
+            imageViewport.style.cursor = 'grabbing';
+            startX = e.clientX - imgOffsetX;
+            startY = e.clientY - imgOffsetY;
+        };
+
+        window.onmousemove = (e) => {
+            if (!isDraggingImg) return;
+            imgOffsetX = e.clientX - startX;
+            imgOffsetY = e.clientY - startY;
+            updateImageTransform();
+        };
+
+        window.onmouseup = () => {
+            isDraggingImg = false;
+            imageViewport.style.cursor = 'grab';
+        };
+
+        function closePreview() {
+            previewOverlay.style.display = 'none';
+            videoPreview.pause(); videoPreview.src = "";
+            audioPreview.pause(); audioPreview.src = "";
+            resetImageTransform();
+        }
+
+        function adjustSpeed(delta) {
+            const media = videoPreview.style.display !== 'none' ? videoPreview : audioPreview;
+            let newSpeed = Math.max(0.25, Math.min(4, media.playbackRate + delta));
+            media.playbackRate = newSpeed;
+            currentSpeedEl.innerText = `${newSpeed.toFixed(2)}x`;
+        }
+
+        // 点击遮罩关闭
+        previewOverlay.onclick = (e) => { if (e.target === previewOverlay) closePreview(); };
 
         function copyToClipboard(btn) {
             const code = btn.parentElement.nextElementSibling.innerText;
@@ -842,7 +1075,9 @@
                         wrapper.appendChild(currentAssistantMsg);
                         chatHistory.appendChild(wrapper); 
                     }
-                    currentRawContent += data.content; currentAssistantMsg.querySelector('.content').innerHTML = marked.parse(currentRawContent);
+                    currentRawContent += data.content; 
+                    currentAssistantMsg.querySelector('.content').innerHTML = marked.parse(currentRawContent);
+                    lucide.createIcons(); // 实时扫描并生成新出现的图标
                     chatHistory.scrollTop = chatHistory.scrollHeight;
                 } 
                 else if (data.type === 'stream_image') {

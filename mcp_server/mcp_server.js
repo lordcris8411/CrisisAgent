@@ -35,6 +35,17 @@ app.get("/download", (req, res) => {
     return res.status(404).send("File not found");
   }
 
+  // 预览模式逻辑：如果 view=1，则不强制下载
+  if (req.query.view === '1') {
+    console.log(`${STYLES.cyan}[PREVIEW] Viewing file: ${absolutePath}${STYLES.reset}`);
+    const ext = path.extname(absolutePath).toLowerCase();
+    if (ext === '.pdf') {
+      res.setHeader('Content-Type', 'application/pdf');
+    }
+    res.setHeader('Content-Disposition', 'inline');
+    return res.sendFile(absolutePath);
+  }
+
   console.log(`${STYLES.yellow}[DOWNLOAD] Serving file: ${absolutePath}${STYLES.reset}`);
   res.download(absolutePath, (err) => {
     if (err) {
