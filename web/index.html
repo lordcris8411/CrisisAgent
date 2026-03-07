@@ -490,6 +490,59 @@
         }
         .preview-btn:hover { background: var(--accent-main); color: white; }
 
+        /* Media Speed Controller Styles */
+        .speed-controller {
+            display: flex;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            overflow: hidden;
+            height: 28px;
+        }
+        .speed-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            padding: 0 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            height: 100%;
+        }
+        .speed-btn:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-main);
+        }
+        .speed-btn:active {
+            background: var(--accent-main);
+            color: white;
+        }
+        .speed-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--accent-main);
+            padding: 0 10px;
+            min-width: 45px;
+            text-align: center;
+            border-left: 1px solid var(--border);
+            border-right: 1px solid var(--border);
+            cursor: pointer;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.2);
+            font-weight: bold;
+        }
+        .speed-value:hover {
+            background: rgba(100, 116, 139, 0.1);
+            color: #fff;
+        }
+        .speed-btn svg { width: 14px; height: 14px; }
+
         /* 链接旁的预览按钮 */
         .quick-preview-trigger {
             display: inline-flex; align-items: center; justify-content: center;
@@ -653,6 +706,9 @@
                 </div>
                 <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
                     <span id="file-meta">File attached</span>
+                    <div id="upload-progress-container" style="display:none; width: 100%; height: 4px; background: #1e293b; margin: 4px 0;">
+                        <div id="upload-progress-bar" style="width: 0%; height: 100%; background: var(--accent-main); transition: width 0.1s;"></div>
+                    </div>
                     <button id="push-btn" onclick="pushFileToServer()" style="width: fit-content; background: transparent; border: 1px solid var(--border); color: var(--accent-main); font-size: 0.7rem; padding: 2px 8px; cursor: pointer; text-transform: uppercase; letter-spacing: 1px;">Push to Server</button>
                 </div>
             </div>
@@ -689,10 +745,12 @@
             <div id="preview-header">
                 <span id="preview-title">File Preview</span>
                 <div style="display: flex; gap: 10px; align-items: center;">
-                    <div id="media-controls" style="display: none; gap: 10px;">
-                        <button class="preview-btn" onclick="adjustSpeed(-0.25)">-0.25x</button>
-                        <span id="current-speed" style="font-size: 0.75rem; color: var(--accent-main); min-width: 40px; text-align: center;">1.0x</span>
-                        <button class="preview-btn" onclick="adjustSpeed(0.25)">+0.25x</button>
+                    <div id="media-controls" style="display: none;">
+                        <div class="speed-controller">
+                            <button class="speed-btn" onclick="adjustSpeed(-0.25)" title="Slower"><i data-lucide="minus"></i></button>
+                            <div class="speed-value" id="current-speed" onclick="adjustSpeed(0)" title="Click to Reset">1.0x</div>
+                            <button class="speed-btn" onclick="adjustSpeed(0.25)" title="Faster"><i data-lucide="plus"></i></button>
+                        </div>
                     </div>
                     <div id="image-controls" style="display: none; gap: 10px; align-items: center;">
                         <button class="preview-btn" onclick="adjustZoom(1.2)">🔍 +</button>
@@ -986,9 +1044,24 @@
 
         function adjustSpeed(delta) {
             const media = videoPreview.style.display !== 'none' ? videoPreview : audioPreview;
-            let newSpeed = Math.max(0.25, Math.min(4, media.playbackRate + delta));
+            if (!media) return;
+
+            let newSpeed;
+            if (delta === 0) {
+                newSpeed = 1.0;
+            } else {
+                newSpeed = Math.max(0.25, Math.min(4, media.playbackRate + delta));
+            }
+            
             media.playbackRate = newSpeed;
             currentSpeedEl.innerText = `${newSpeed.toFixed(2)}x`;
+            
+            // Highlight reset if not 1.0
+            if (newSpeed !== 1.0) {
+                currentSpeedEl.style.color = '#fff';
+            } else {
+                currentSpeedEl.style.color = 'var(--accent-main)';
+            }
         }
 
         // 点击遮罩关闭
@@ -1279,33 +1352,50 @@
         function handleFile(inputOrFile) {
             const file = inputOrFile instanceof File ? inputOrFile : inputOrFile.files[0];
             if (!file) return;
-            pendingFileRaw = file; // 保存原始对象
-            pendingFileName = file.name; pendingFileType = file.type;
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                pendingFileBase64 = e.target.result.split(',')[1];
-                const previewImg = document.getElementById('image-preview');
-                const fileIcon = document.getElementById('file-icon');
-                const fileMeta = document.getElementById('file-meta');
-                if (file.type.startsWith('image/')) { 
-                    previewImg.src = e.target.result; 
-                    previewImg.style.display = 'block'; 
-                    fileIcon.style.display = 'none'; 
-                }
-                else { 
-                    previewImg.style.display = 'none'; 
-                    fileIcon.style.display = 'flex';
-                    const { icon, color } = getFileIcon(file);
-                    fileIcon.innerHTML = `<i data-lucide="${icon}" style="color: ${color}"></i>`;
-                    lucide.createIcons();
-                }
-                fileMeta.innerText = `${file.name} (${(file.size/1024).toFixed(1)} KB)`;
-                document.getElementById('image-preview-container').style.display = 'flex';
-            };
-            reader.readAsDataURL(file);
+            pendingFileRaw = file; 
+            pendingFileName = file.name; 
+            pendingFileType = file.type;
+            pendingFileBase64 = null; 
+
+            const previewImg = document.getElementById('image-preview');
+            const fileIcon = document.getElementById('file-icon');
+            const fileMeta = document.getElementById('file-meta');
+            const progressContainer = document.getElementById('upload-progress-container');
+            const progressBar = document.getElementById('upload-progress-bar');
+
+            progressContainer.style.display = 'none';
+            progressBar.style.width = '0%';
+
+            if (file.type.startsWith('image/')) { 
+                if (previewImg.src && previewImg.src.startsWith('blob:')) URL.revokeObjectURL(previewImg.src);
+                previewImg.src = URL.createObjectURL(file); 
+                previewImg.style.display = 'block'; 
+                fileIcon.style.display = 'none'; 
+            }
+            else { 
+                previewImg.style.display = 'none'; 
+                fileIcon.style.display = 'flex';
+                const { icon, color } = getFileIcon(file);
+                fileIcon.innerHTML = `<i data-lucide="${icon}" style="color: ${color}"></i>`;
+                lucide.createIcons();
+            }
+            fileMeta.innerText = `${file.name} (${(file.size/1024/1024).toFixed(2)} MB)`;
+            document.getElementById('image-preview-container').style.display = 'flex';
+
+            // Only read as Base64 for small files (for chat context)
+            if (file.size < 20 * 1024 * 1024) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    pendingFileBase64 = e.target.result.split(',')[1];
+                };
+                reader.readAsDataURL(file);
+            }
         }
 
         function clearFile() {
+            const previewImg = document.getElementById('image-preview');
+            if (previewImg.src && previewImg.src.startsWith('blob:')) URL.revokeObjectURL(previewImg.src);
+            
             pendingFileBase64 = null; pendingFileName = ""; pendingFileType = ""; pendingFileRaw = null;
             document.getElementById('file-input').value = '';
             document.getElementById('image-preview-container').style.display = 'none';
@@ -1316,53 +1406,50 @@
             pushBtn.style.color = 'var(--accent-main)';
         }
 
-        async function pushFileToServer() {
-            if (!pendingFileRaw && !pendingFileBase64) return;
+        function pushFileToServer() {
+            if (!pendingFileRaw) return;
             const btn = document.getElementById('push-btn');
+            const progressContainer = document.getElementById('upload-progress-container');
+            const progressBar = document.getElementById('upload-progress-bar');
+            
             const originalText = btn.innerText;
             btn.innerText = 'Pushing...';
             btn.disabled = true;
+            progressContainer.style.display = 'block';
 
-            try {
-                let res;
-                if (pendingFileRaw) {
-                    // 优先使用流式二进制上传
-                    res = await fetch('/api/upload_binary', {
-                        method: 'POST',
-                        headers: { 
-                            'Content-Type': 'application/octet-stream',
-                            'X-File-Name': encodeURIComponent(pendingFileName)
-                        },
-                        body: pendingFileRaw
-                    });
-                } else {
-                    // 回退方案
-                    res = await fetch('/api/save_attachment', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name: pendingFileName, data: pendingFileBase64, type: pendingFileType })
-                    });
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/upload_binary', true);
+            xhr.setRequestHeader('X-File-Name', encodeURIComponent(pendingFileName));
+            xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+            xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                    const percent = (e.loaded / e.total) * 100;
+                    progressBar.style.width = percent + '%';
+                    btn.innerText = `Pushing ${Math.round(percent)}%`;
                 }
-                const data = await res.json();
-                if (data.success) {
+            };
+
+            xhr.onload = () => {
+                if (xhr.status === 200) {
                     btn.innerText = 'Saved!';
                     btn.style.borderColor = 'var(--file-xls)';
                     btn.style.color = 'var(--file-xls)';
+                    setTimeout(() => progressContainer.style.display = 'none', 1000);
                 } else {
-                    throw new Error(data.error);
+                    btn.innerText = 'Error';
+                    btn.style.borderColor = 'var(--file-pdf)';
+                    btn.style.color = 'var(--file-pdf)';
                 }
-            } catch (e) {
-                console.error('Push failed:', e);
-                btn.innerText = 'Error';
+            };
+
+            xhr.onerror = () => {
+                btn.innerText = 'Network Error';
                 btn.style.borderColor = 'var(--file-pdf)';
                 btn.style.color = 'var(--file-pdf)';
-                setTimeout(() => {
-                    btn.innerText = originalText;
-                    btn.disabled = false;
-                    btn.style.borderColor = 'var(--border)';
-                    btn.style.color = 'var(--accent-main)';
-                }, 2000);
-            }
+            };
+
+            xhr.send(pendingFileRaw);
         }
 
         function appendMessage(msg) {
