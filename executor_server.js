@@ -91,19 +91,23 @@ const localTools = [
           throw new Error(`No image found at index ${idx}. Available: ${sessionImages ? sessionImages.length : 0}`);
         }
 
+        const imgObj = sessionImages[idx];
+        const base64Data = typeof imgObj === 'string' ? imgObj : imgObj.data;
+        const originalName = (typeof imgObj === 'object' && imgObj.name) ? imgObj.name : `upload_${Date.now()}.jpg`;
+
         let targetPath = args.local_path || args.path || args.destination;
         if (!targetPath) {
           const uploadsDir = path.join(process.cwd(), 'uploads');
           if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-          targetPath = path.join(uploadsDir, `upload_${Date.now()}.jpg`);
+          targetPath = path.join(uploadsDir, originalName);
         } else if (targetPath.endsWith('/') || targetPath.endsWith('\\') || !path.extname(targetPath)) {
           fs.mkdirSync(targetPath, { recursive: true });
-          targetPath = path.join(targetPath, `upload_${Date.now()}.jpg`);
+          targetPath = path.join(targetPath, originalName);
         } else {
           fs.mkdirSync(path.dirname(targetPath), { recursive: true });
         }
         
-        const buffer = Buffer.from(sessionImages[idx], 'base64');
+        const buffer = Buffer.from(base64Data, 'base64');
         fs.writeFileSync(targetPath, buffer);
         
         return { content: [{ type: "text", text: `SUCCESS: Image saved to local path: ${targetPath}` }] };
@@ -267,15 +271,18 @@ async function runStatelessLLM(skill, userInstruction, images = [], files = [], 
 
   // 注入附件上下文提示，防止 AI 盲目调用保存工具
   if (images && images.length > 0) {
-    expertSystemPrompt += `\n\n[ATTACHMENT ALERT: VISION READY] ${images.length} image(s) have been loaded into your visual context. You can SEE and ANALYZE them directly. Do NOT use 'save_uploaded_image' unless the user explicitly asks to store them on disk.`;
-  }
-  if (files && files.length > 0) {
+    const imageList = images.map((img, i) => `Index ${i}: ${img.name || 'unnamed'}`).join(', ');
+    expertSystemPrompt += `\n\n[ATTACHMENT ALERT: VISION READY] ${images.length} image(s) have been loaded into your visual context: ${imageList}. You can SEE and ANALYZE them directly. Do NOT use 'save_uploaded_image' unless the user explicitly asks to store them on disk. When saving, use their original filenames if possible.`;
+  }  if (files && files.length > 0) {
     const fileList = files.map(f => f.name).join(', ');
     expertSystemPrompt += `\n\n[ATTACHMENT ALERT: SESSION FILES] The following files are available for this session: ${fileList}. You can refer to them by name.`;
   }
 
   let userMsg = { role: 'user', content: userInstruction };
-  if (images && images.length > 0) userMsg.images = images;
+  if (images && images.length > 0) {
+    // 关键修复：发送给 Ollama 的 images 必须是纯 Base64 字符串数组
+    userMsg.images = images.map(img => typeof img === 'string' ? img : img.data);
+  }
 
   let messages = [
     { role: 'system', content: expertSystemPrompt },
@@ -445,10 +452,14 @@ app.post("/call", async (req, res) =>
 
     const skillSpecs = enabledSkills.map(s => `- ${s.name}: ${s.description}`).join('\n');
     const routerPrompt = `Task: "${instruction}"${contextHint}\n\nChoose the MOST SPECIFIC skill from the following list:\n${skillSpecs}\n\nOutput ONLY the skill name. If no suitable match exists, output 'NONE'.`;
+    
+    // 关键修复：发送给 Ollama 的 images 必须是纯 Base64 字符串数组
+    const formattedImages = images ? images.map(img => typeof img === 'string' ? img : img.data) : [];
+
     const routerResponse = await fetch(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages: [{ role: 'user', content: routerPrompt, images: images }], think: false ,stream: false, options: { temperature: 0 } })
+      body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages: [{ role: 'user', content: routerPrompt, images: formattedImages }], think: false ,stream: false, options: { temperature: 0 } })
     });
 
     const routerData = await routerResponse.json();

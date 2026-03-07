@@ -149,9 +149,11 @@ wss.on('connection', (ws) => {
       let imageNames = [];
       if (data.images) {
         data.images.forEach(img => {
-          if (typeof img === 'string') processedImages.push(img);
-          else {
-            processedImages.push(img.data);
+          if (typeof img === 'string') {
+            processedImages.push(img);
+          } else {
+            // 保留完整对象供 Executor 使用
+            processedImages.push({ name: img.name, data: img.data, type: img.type });
             if (img.name) imageNames.push(img.name);
           }
         });
@@ -241,7 +243,23 @@ async function chat(input, images = [], files = [], imageNames = []) {
       systemPrompt += "\nNOTE: For analysis/vision tasks, the Executor will automatically receive these attachments in its context. DO NOT ask to 'save' them unless the user specifically uses words like 'Save', 'Push', 'Store' or 'Download'.";
     }
 
-    const messages = [{ role: 'system', content: systemPrompt }, ...history.filter(m => m.role !== 'system')];
+    // 关键修复：发送给 Ollama 的 images 必须是纯 Base64 字符串数组
+    // 同时，将附件文件名注入 content，让 LLM 意识到文件的存在
+    const formattedHistory = history.filter(m => m.role !== 'system').map(m => {
+      let content = m.content;
+      if (m.role === 'user' && m.files && m.files.length > 0) {
+        const fileList = m.files.map(f => f.name).join(', ');
+        content = `[Attached Files: ${fileList}]\n${content}`;
+      }
+      
+      const newMsg = { ...m, content };
+      if (m.images) {
+        newMsg.images = m.images.map(img => typeof img === 'string' ? img : img.data);
+      }
+      return newMsg;
+    });
+
+    const messages = [{ role: 'system', content: systemPrompt }, ...formattedHistory];
     
     try {
       const response = await fetch(`${CONFIG.CLI_LLM.HOST}/api/chat`, {
