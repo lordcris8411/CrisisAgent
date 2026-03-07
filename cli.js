@@ -285,6 +285,9 @@ async function chat(input, images = [], files = [], imageNames = []) {
     currentAbortController = new AbortController();
     let systemPrompt = getSystemPrompt();
     
+    // 强制直接行动指令
+    systemPrompt += "\n\nCRITICAL: If the task requires a tool, CALL IT IMMEDIATELY. Do not provide a long introduction or talk about your plan. Just act.";
+
     // 如果当前轮次包含图片或文件，强制要求委派并明确语义
     if ((images && images.length > 0) || (files && files.length > 0)) {
       systemPrompt += "\n\nCRITICAL: The current message contains attachments (images/files). You MUST use 'delegate_task' to pass the user request to the Executor.";
