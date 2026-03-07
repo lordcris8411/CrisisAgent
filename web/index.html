@@ -240,7 +240,6 @@
 
         #input-container { 
             padding: 20px; 
-            border-top: 1px solid var(--border); 
             background: var(--bg-dark);
             z-index: 100;
             width: 100%;
@@ -341,7 +340,64 @@
     </div>
     <div id="app">
         <div id="sidebar">
-            <div class="brand">Crisis Agent</div>
+            <div class="brand">
+                <svg width="180" height="32" viewBox="0 0 180 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <g fill="var(--accent-main)">
+                        <!-- CRISIS (网格化等宽修复) -->
+                        <!-- C -->
+                        <path d="M14 4H2V28H14V24H6V8H14V4Z"/>
+                        <!-- R -->
+                        <path d="M18 4H30V16H26L30 28H25L21 18V28H17V4ZM21 12H26V8H21V12Z"/>
+                        <!-- I -->
+                        <path d="M34 4H38V28H34V4Z"/>
+                        <!-- S (修正粗细) -->
+                        <path d="M54 4H42V18H50V24H42V28H54V14H46V8H54V4Z"/>
+                        <!-- I -->
+                        <path d="M58 4H62V28H58V4Z"/>
+                        <!-- S (修正粗细) -->
+                        <path d="M78 4H66V18H74V24H66V28H78V14H70V8H78V4Z"/>
+                        
+                        <!-- AGENT -->
+                        <!-- A -->
+                        <path d="M104 4H92V28H96V18H100V28H104V4ZM96 14V8H100V14H96Z"/>
+                        <!-- G -->
+                        <path d="M120 4H108V28H120V16H115V20H116V24H112V8H120V4Z"/>
+                        <!-- E -->
+                        <path d="M124 4V28H136V24H128V18H132V14H128V8H136V4H124Z"/>
+                        <!-- N -->
+                        <path d="M140 4V28H144V12L148 28H152V4H148V20L144 4H140Z"/>
+                        <!-- T -->
+                        <path d="M156 4V8H160V28H164V8H168V4H156Z"/>
+                    </g>
+                </svg>
+            </div>
+            <div class="stats-card">
+                        <!-- I -->
+                        <path d="M35 4H39V28H35V4Z"/>
+                        <!-- S (全高修复) -->
+                        <path d="M55 4H41V14H49V18H41V28H55V18H47V14H55V4Z"/>
+                        <!-- I -->
+                        <path d="M59 4H63V28H59V4Z"/>
+                        <!-- S (全高修复) -->
+                        <path d="M79 4H65V14H73V18H65V28H79V18H71V14H79V4Z"/>
+                        
+                        <!-- 分隔块 -->
+                        <rect x="84" y="4" width="2" height="24" opacity="0.3"/>
+
+                        <!-- AGENT -->
+                        <!-- A -->
+                        <path d="M98 4H92V28H96V18H100V28H104V4H98ZM96 14V8H100V14H96Z"/>
+                        <!-- G -->
+                        <path d="M118 4H108V28H118V16H113V20H114V24H112V10H118V4Z"/>
+                        <!-- E -->
+                        <path d="M122 4V28H132V22H126V18H130V14H126V10H132V4H122Z"/>
+                        <!-- N -->
+                        <path d="M136 4V28H140V12L144 28H148V4H144V20L136 4H132Z"/>
+                        <!-- T -->
+                        <path d="M152 4V8H156V28H160V8H164V4H152Z"/>
+                    </g>
+                </svg>
+            </div>
             <div class="stats-card">
                 <div class="stat-item">Tokens: <span id="total-tokens" class="stat-value">0</span></div>
                 <div class="stat-item">Prompt: <span id="prompt-tokens" class="stat-value">0</span></div>
@@ -371,7 +427,11 @@
                     <div id="suggestions"></div>
                     <div class="input-wrapper">
                         <input type="file" id="file-input" style="display: none;" onchange="handleFile(this)">
-                        <button class="upload-btn" onclick="document.getElementById('file-input').click()" title="Upload File">📎</button>
+                        <button class="upload-btn" onclick="document.getElementById('file-input').click()" title="Upload File">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">
+                                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+                            </svg>
+                        </button>
                         <input type="text" id="prompt-input" placeholder="Type / for commands..." autocomplete="off">
                         <div class="think-toggle-container">
                             <span>Think</span>
@@ -519,12 +579,36 @@
         let last_div = null;
         let currentAssistantMsg = null;
         let currentRawContent = "";
+        let reconnectTimer = null;
 
         function connect() {
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+            
             socket = new WebSocket(`ws://${window.location.host}`);
-            socket.onopen = () => { fetchSkills(); };
-            socket.onclose = () => { if (localStorage.getItem('reboot_start')) setTimeout(connect, 1000); };
-            socket.onerror = () => { if (localStorage.getItem('reboot_start')) socket.close(); };
+            
+            socket.onopen = () => { 
+                console.log("WebSocket connected");
+                fetchSkills(); 
+                // 如果当前有重启遮罩，连接成功后移除它
+                if (localStorage.getItem('reboot_start')) {
+                    localStorage.removeItem('reboot_start');
+                    rebootOverlay.style.display = 'none';
+                    if (rebootInterval) clearInterval(rebootInterval);
+                }
+            };
+
+            socket.onclose = () => { 
+                console.log("WebSocket closed. Retrying in 2s...");
+                // 只要连接断开，就启动重连定时器
+                if (!reconnectTimer) {
+                    reconnectTimer = setTimeout(connect, 2000);
+                }
+            };
+
+            socket.onerror = (err) => { 
+                console.error("WebSocket error:", err);
+                socket.close(); 
+            };
             socket.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.type === 'history') { chatHistory.innerHTML = ''; data.history.forEach(appendMessage); }
