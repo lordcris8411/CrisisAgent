@@ -201,17 +201,54 @@
             padding: 0 20px;
         }
 
-        .message { margin-bottom: 30px; }
+        .message { margin-bottom: 30px; display: flex; flex-direction: column; }
+        .role-user { align-items: flex-start; }
+        .role-assistant { align-items: flex-end; }
+
         .role-tag { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; margin-bottom: 8px; letter-spacing: 1px; }
         .role-user .role-tag { color: #94a3b8; }
-        .role-assistant .role-tag { color: var(--accent-main); }
+        .role-user .content {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            padding: 12px 18px;
+            display: inline-block;
+            max-width: 85%;
+            border-radius: 0;
+        }
+        .role-assistant .role-tag { color: var(--accent-main); text-align: right; }
+        .role-assistant .content {
+            background: rgba(100, 116, 139, 0.05);
+            border: 1px solid var(--border);
+            padding: 12px 18px;
+            display: inline-block;
+            max-width: 85%;
+            border-radius: 0;
+            text-align: left;
+        }
+        
+        .thought-block { 
+            background: var(--bg-thought); 
+            border-left: 2px solid var(--accent-main); 
+            padding: 15px; 
+            margin: 10px 0; 
+            color: var(--text-dim); 
+            font-size: 0.9rem; 
+            white-space: pre-wrap; 
+            border-radius: 0; 
+            opacity: 0.7;
+            max-width: 85%;
+        }
+        .role-assistant .thought-block { border-left: none; border-right: 2px solid var(--accent-main); text-align: left; }
         
         .role-tool { border-left: 2px solid #334155; padding-left: 15px; margin: 15px 0; }
         .role-tool .role-tag { color: #475569; font-size: 0.6rem; }
         .role-tool .content { font-family: monospace; font-size: 0.85rem; color: #64748b; }
 
-        .content { line-height: 1.6; }
+        .content { line-height: 1.6; font-size: 0.9rem; }
+        .content:empty { display: none; }
         .content p { margin: 0 0 1em 0; }
+        .content h1, .content h2, .content h3 { font-size: 1.05rem; margin: 1.2em 0 0.6em 0; color: var(--accent-main); }
+        .content h4, .content h5, .content h6 { font-size: 0.95rem; margin: 1em 0 0.5em 0; }
         .content code { background: var(--bg-code); padding: 2px 5px; border-radius: 0; font-family: monospace; font-size: 0.9em; }
         .content a { 
             color: #60a5fa; 
@@ -257,16 +294,16 @@
         .content th { background: rgba(255,255,255,0.01); }
         .content ul, .content ol { padding-left: 20px; margin-bottom: 1em; }
 
-        .thought-block { background: var(--bg-thought); border-left: 2px solid var(--accent-main); padding: 15px; margin: 10px 0; color: var(--text-dim); font-size: 0.9rem; white-space: pre-wrap; border-radius: 0; opacity: 0.7; }
-        
         /* 合并后的日志样式 */
         .log-wrapper {
-            margin: 15px 0;
+            margin: 15px 0 15px auto;
             border: 1px solid var(--border);
             border-radius: 0;
             overflow: hidden;
             background: rgba(255,255,255,0.01);
-            width: 100%;
+            max-width: 85%;
+            width: fit-content;
+            min-width: 300px;
             box-sizing: border-box;
         }
         .log-header {
@@ -1091,8 +1128,12 @@
                 else if (data.type === 'stream_image') {
                     const wrapper = document.createElement('div');
                     wrapper.className = 'message-container';
+                    const el = createMessageElement('assistant');
+                    el.querySelector('.role-tag').innerText = 'SCREEN CAPTURE';
                     const img = document.createElement('img'); img.className = 'captured-image'; img.src = `data:image/jpeg;base64,${data.data}`;
-                    img.onclick = () => openLightbox(img.src); wrapper.appendChild(img);
+                    img.onclick = () => openLightbox(img.src); 
+                    el.querySelector('.content').appendChild(img);
+                    wrapper.appendChild(el);
                     chatHistory.appendChild(wrapper); chatHistory.scrollTop = chatHistory.scrollHeight;
                 } else if (data.type === 'thinking_chunk') {
                     if (!currentAssistantMsg) { 
