@@ -5,53 +5,69 @@ Crisis Agent is a hierarchical AI agent system that bridges high-level user inte
 ## Core Architecture
 
 - **CLI (`cli.js`)**: The "Commander" layer.
-    - Manages user interaction and conversation history.
-    - Uses **Semantic Delegation**: Instead of calling complex system APIs, it delegates tasks using natural language to the Executor via the `delegate_task` tool.
-    - Tracks global token usage (Prompt/Response) across all layers.
-    - Supports real-time **Thinking (CoT)** display.
-    - Hosts a Web UI for remote access to the local machine.
+    - Manages user interaction, conversation history, and high-level delegation.
+    - **Log Aggregator**: Collects and displays real-time logs from all system components.
+    - **Attachment Host**: Handles complex file uploads (Base64 and binary streaming) and manages the `uploads/` directory.
+    - **Web UI**: Hosts a WebSocket-enabled dashboard for remote access, real-time log streaming, and attachment management.
 - **Executor Server (`executor_server.js`)**: The "Dispatcher & Expert" layer.
-    - **Stage 1 (Dispatcher)**: Uses a lightweight LLM call to route natural language instructions to the most appropriate "Skill" (Function).
-    - **Stage 2 (Expert)**: Spawns a specialized LLM agent for the selected skill, granted access only to required low-level tools.
-    - Dynamically loads and manages modular skills from the `functions/` directory.
-    - Reports internal token usage back to the CLI.
+    - **Stage 1 (Dispatcher)**: Uses a lightweight LLM call to route natural language instructions to the most appropriate "Skill".
+    - **Stage 2 (Expert)**: Spawns a specialized LLM agent for the selected skill, granted access only to authorized tools.
+    - **Discovery Protocol**: Enforces tool safety by requiring experts to "unlock" tool schemas before execution.
 - **Resource MCP (`mcp_server/mcp_server.js`)**: The "Capabilities" layer.
-    - A robust RESTful server exposing raw system tools (File I/O, Screen Capture, Desktop Automation) on the local host.
-    - Designed for stability: Modular loading prevents crashes even if a tool script has syntax errors.
+    - A robust RESTful server exposing raw system tools (File I/O, Screen Capture, Desktop Automation).
+    - **Protocol-Enforced Safety**: Implements a strict "Look Before You Leap" policy where tools are locked by default until a schema discovery call is made.
+- **Updater Server (`updater_server.js`)**: The "Maintenance" layer.
+    - Manages remote file updates and triggers synchronized system reboots across all layers.
 - **Supervisor (`start.js`)**: The "Process Manager".
-    - Orchestrates the startup sequence (MCP Server -> Executor -> CLI).
-    - Implements robust **Supervised Rebooting**: Detects exit code `99` from sub-processes to trigger a synchronized system restart.
+    - Orchestrates the startup sequence (Updater -> MCP -> Executor -> CLI).
+    - Implements **Supervised Rebooting**: Detects exit code `99` from sub-processes to trigger an ordered system-wide restart.
 
 ## Key Features
 
+- **Protocol-Enforced Safety**: Tools are locked by default. The Executor MUST call `get_tool_usage` to retrieve the schema and safety constraints before execution, ensuring the LLM operates with accurate, up-to-date context.
+- **Real-Time Log Streaming**: Integrated Web UI provides a live feed of the entire system's internal thinking (CoT) and execution logs via WebSockets.
+- **Attachment Awareness**: Supports multi-modal workflows with Base64 and streaming support for large files and images, automatically shared between CLI and Executor.
 - **Local System Control**: Deep integration with the host machine via PowerShell and Win32 APIs for file management, process control, and system monitoring.
-- **Semantic Routing**: Moves away from rigid API protocols to flexible, intent-based delegation.
-- **Hierarchical Thinking**: Supports independent CoT display for both CLI and Executor, providing visibility into the entire decision chain.
-- **Modular Skill System**: Skills are defined in `.func` JSON files, including their own system prompts and tool whitelists.
-- **Dynamic Skill Management**: Enable or disable skills on the fly without restarting the server.
-- **Attachment Awareness**: Seamlessly handles user-uploaded files and images, saving them directly to the system for analysis or storage.
+- **Hierarchical Thinking**: Supports independent CoT display for both CLI and Executor layers, providing visibility into the entire decision chain.
+- **Modular Skill System**: Skills are defined in `.func` JSON files, including their own system prompts, tool whitelists, and dependency checks.
 
 ## Available Skills (Built-in)
 
-- **File Operations**: Comprehensive CRUD on the local file system.
-- **System Monitoring**: Performance Monitor (CPU/Mem/Disk), Hardware Analyst, Process Manager.
-- **Visuals**: Screen Helper (Capture and Analysis) of the host desktop.
-- **Automation**: Application Launcher and Script Execution.
+- **File Manager**: Comprehensive CRUD and manipulation of the local file system.
+- **App Launcher**: Application execution and automation.
+- **Downloader**: Remote resource retrieval and storage.
+- **Env Analyst**: Environment context and system introspection.
+- **Hardware Analyst**: Performance monitoring and hardware diagnostics.
+- **Process Manager**: System process oversight and management.
+- **Screen Reader**: Visual capture and analysis of the host desktop.
+- **Time Teller**: Temporal awareness and scheduling.
+- **Visual Analyst**: Specialized image and visual data processing.
 
 ## CLI Commands
 
-- `/system`: View the current system prompt and its static token cost.
-- `/context`: View conversation history and cumulative token usage.
+### Session Management
+- `/help`: Display the comprehensive help menu.
+- `/clear`: Clear the terminal screen.
+- `/reset`: Reset the current conversation history and token counters.
+- `/reboot`: Perform a clean, ordered restart of the entire system.
+- `/exit`: Terminate the application.
+
+### Debugging & Monitoring
+- `/context`: View detailed conversation history and cumulative token usage.
+- `/system`: View the CLI-side system prompt and its current token cost.
+- `/exe_system`: View the Executor-side system prompt template and cached environment context.
+- `/skill_debug`: Diagnose skill health and check for missing MCP tool dependencies.
+
+### System & Skill Control
 - `/list skills`: List all available skills and their current [ON/OFF] status.
 - `/list mcp functions`: List all low-level atomic tools available on the system.
-- `/set skill <name> enabled/disabled`: Dynamically toggle a skill's availability (persisted to disk).
-- `/set cli_think on/off`: Toggle thinking display for the CLI layer.
-- `/set exec_think on/off`: Toggle thinking display for the Executor layer.
-- `/reboot`: Perform a clean, ordered restart of the entire system.
-- `/clear`, `/reset`, `/exit`: Standard session management.
+- `/set skill <name> <on/off>`: Dynamically toggle a skill's availability.
+- `/set cli_think <on/off>`: Toggle thinking (CoT) display for the CLI layer.
+- `/set exec_think <on/off>`: Toggle thinking (CoT) display for the Executor layer.
 
 ## Development Conventions
 
 - **Brace Style**: Strictly follow the **Allman style** (opening braces on a new line).
 - **Protocol**: Prefer semantic delegation (`delegate_task`) over expanding the MCP toolset for high-level logic.
-- **Stability**: Implement `try-catch` and verification steps for all system-impacting operations.
+- **Discovery**: Always use `get_tool_usage` before executing any MCP tool to ensure safety and schema compliance.
+- **Stability**: Implement robust `try-catch` blocks and verification steps for all system-impacting operations.

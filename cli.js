@@ -1,3 +1,4 @@
+const { spawn } = require('child_process');
 const readline = require('readline');
 const fs = require('fs');
 const path = require('path');
@@ -112,6 +113,53 @@ app.post('/api/upload_binary', (req, res) => {
     console.error(`${STYLES.red}[Storage] Stream Save Error: ${err.message}${STYLES.reset}`);
     res.status(500).json({ error: err.message });
   });
+});
+
+const runningScripts = new Map();
+
+app.post('/api/run_script', (req, res) => {
+  const { code, scriptId } = req.body;
+  if (!code || !scriptId) return res.status(400).json({ error: 'Missing code or scriptId' });
+
+  try {
+    const tmpDir = path.join(__dirname, 'script', 'tmp');
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+
+    const tmpFilePath = path.join(tmpDir, 'tmp.js');
+    fs.writeFileSync(tmpFilePath, code);
+
+    const child = spawn('node', [tmpFilePath]);
+    runningScripts.set(scriptId, child);
+
+    child.stdout.on('data', (data) => {
+      broadcast({ type: 'script_output', scriptId, content: data.toString() });
+    });
+
+    child.stderr.on('data', (data) => {
+      broadcast({ type: 'script_output', scriptId, content: data.toString(), isError: true });
+    });
+
+    child.on('close', (code) => {
+      broadcast({ type: 'script_end', scriptId, exitCode: code });
+      runningScripts.delete(scriptId);
+    });
+
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/stop_script', (req, res) => {
+  const { scriptId } = req.body;
+  const child = runningScripts.get(scriptId);
+  if (child) {
+    child.kill();
+    runningScripts.delete(scriptId);
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ error: 'Script not running' });
+  }
 });
 
 app.get('/api/skills', async (req, res) => {

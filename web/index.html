@@ -499,6 +499,46 @@
         }
         .quick-preview-trigger:hover { background: #60a5fa; color: white; transform: scale(1.1); }
         .quick-preview-trigger svg { width: 12px; height: 12px; stroke-width: 2.5px; }
+
+        /* Runnable Code Block Styles */
+        .code-console {
+            background: #000;
+            border-top: 1px solid var(--border);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            color: #10b981;
+            display: none;
+            position: relative;
+        }
+        .code-console.active { display: block; }
+        .code-console.error { color: #ef4444; }
+        .console-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 5px 15px; background: #0a0a0a; border-bottom: 1px solid #1e293b;
+            font-size: 0.65rem; color: #64748b; font-weight: bold; text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .console-output {
+            padding: 10px 15px;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .console-output.folded { display: none; }
+        .run-btn {
+            background: #10b981; border: none; color: white;
+            padding: 2px 10px; border-radius: 2px; cursor: pointer;
+            font-size: 0.7rem; font-weight: bold; margin-right: 8px;
+            transition: all 0.2s;
+        }
+        .run-btn:hover { background: #059669; }
+        .run-btn.stop { background: #ef4444; }
+        .run-btn.stop:hover { background: #dc2626; }
+        .console-close {
+            position: absolute; top: 5px; right: 10px;
+            cursor: pointer; color: #64748b; font-size: 0.8rem;
+        }
+        .console-close:hover { color: white; }
     </style>
 </head>
 <body>
@@ -778,9 +818,30 @@
         renderer.code = function(args) {
             const code = typeof args === 'object' ? args.text : args;
             const lang = (typeof args === 'object' ? args.lang : arguments[1]) || 'plaintext';
+            const scriptId = 'script_' + Math.random().toString(36).substr(2, 9);
             let highlighted;
             try { highlighted = (lang && hljs.getLanguage(lang)) ? hljs.highlight(code, { language: lang }).value : hljs.highlightAuto(code).value; } catch (e) { highlighted = code; }
-            return `<div class="code-container"><div class="code-header"><span>${lang}</span><button class="copy-btn" onclick="copyToClipboard(this)">Copy</button></div><pre><code class="hljs language-${lang}">${highlighted}</code></pre></div>`;
+            
+            const isRunnable = lang.toLowerCase() === 'javascript' || lang.toLowerCase() === 'js';
+            const runBtn = isRunnable ? `<button class="run-btn" id="run_${scriptId}" onclick="runJSCode('${scriptId}')">Run</button>` : '';
+            
+            return `<div class="code-container" id="container_${scriptId}">
+                <div class="code-header">
+                    <span>${lang}</span>
+                    <div>
+                        ${runBtn}
+                        <button class="copy-btn" onclick="copyToClipboard(this)">Copy</button>
+                    </div>
+                </div>
+                <pre><code class="hljs language-${lang}" ${isRunnable ? 'contenteditable="true" spellcheck="false"' : ''} id="code_${scriptId}">${highlighted}</code></pre>
+                <div class="code-console" id="console_${scriptId}">
+                    <div class="console-header">
+                        <span>Console Output</span>
+                        <span class="console-fold" onclick="toggleJSConsole('${scriptId}')" style="cursor:pointer;" id="fold_${scriptId}">▼</span>
+                    </div>
+                    <div class="console-output"></div>
+                </div>
+            </div>`;
         };
         marked.setOptions({ renderer });
 
@@ -1146,7 +1207,34 @@
                     let t = currentAssistantMsg.querySelector('.thought-block');
                     if (!t) { t = document.createElement('div'); t.className = 'thought-block'; currentAssistantMsg.insertBefore(t, currentAssistantMsg.querySelector('.content')); }
                     t.textContent += data.content; chatHistory.scrollTop = chatHistory.scrollHeight;
-                } else if (data.role === 'user') { currentAssistantMsg = null; currentRawContent = ""; appendMessage(data); }
+                } 
+                else if (data.type === 'script_output') {
+                    const consoleEl = document.getElementById(`console_${data.scriptId}`);
+                    if (consoleEl) {
+                        const outputEl = consoleEl.querySelector('.console-output');
+                        const line = document.createElement('div');
+                        if (data.isError) line.style.color = '#ef4444';
+                        line.textContent = data.content;
+                        outputEl.appendChild(line);
+                        consoleEl.scrollTop = consoleEl.scrollHeight;
+                    }
+                }
+                else if (data.type === 'script_end') {
+                    resetRunBtn(data.scriptId);
+                    const consoleEl = document.getElementById(`console_${data.scriptId}`);
+                    if (consoleEl) {
+                        const outputEl = consoleEl.querySelector('.console-output');
+                        const endLine = document.createElement('div');
+                        endLine.style.color = '#64748b';
+                        endLine.style.borderTop = '1px solid #1e293b';
+                        endLine.style.marginTop = '5px';
+                        endLine.style.paddingTop = '5px';
+                        endLine.textContent = `Process exited with code ${data.exitCode}`;
+                        outputEl.appendChild(endLine);
+                        consoleEl.scrollTop = consoleEl.scrollHeight;
+                    }
+                }
+                else if (data.role === 'user') { currentAssistantMsg = null; currentRawContent = ""; appendMessage(data); }
             };
         }
 
@@ -1334,6 +1422,71 @@
             if (cmd === '/reboot') showRebootOverlay();
             currentAssistantMsg = null; currentRawContent = ""; setGenerating(true); 
             socket.send(JSON.stringify({ type: 'chat', content: cmd, images: [], files: [] })); 
+        }
+
+        async function runJSCode(scriptId) {
+            const codeEl = document.getElementById(`code_${scriptId}`);
+            const consoleEl = document.getElementById(`console_${scriptId}`);
+            const outputEl = consoleEl.querySelector('.console-output');
+            const runBtn = document.getElementById(`run_${scriptId}`);
+            const foldBtn = document.getElementById(`fold_${scriptId}`);
+            
+            const code = codeEl.innerText;
+            outputEl.innerHTML = '';
+            consoleEl.classList.add('active');
+            consoleEl.classList.remove('error');
+            outputEl.classList.remove('folded');
+            foldBtn.innerText = '▼';
+            
+            runBtn.innerText = 'Stop';
+            runBtn.classList.add('stop');
+            runBtn.onclick = () => stopJSCode(scriptId);
+
+            try {
+                const res = await fetch('/api/run_script', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code, scriptId })
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    outputEl.innerText = `Error starting script: ${data.error}`;
+                    consoleEl.classList.add('error');
+                    resetRunBtn(scriptId);
+                }
+            } catch (e) {
+                outputEl.innerText = `Connection error: ${e.message}`;
+                consoleEl.classList.add('error');
+                resetRunBtn(scriptId);
+            }
+        }
+
+        async function stopJSCode(scriptId) {
+            try {
+                await fetch('/api/stop_script', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ scriptId })
+                });
+            } catch (e) { console.error('Stop error:', e); }
+            resetRunBtn(scriptId);
+        }
+
+        function resetRunBtn(scriptId) {
+            const runBtn = document.getElementById(`run_${scriptId}`);
+            if (runBtn) {
+                runBtn.innerText = 'Run';
+                runBtn.classList.remove('stop');
+                runBtn.onclick = () => runJSCode(scriptId);
+            }
+        }
+
+        function toggleJSConsole(scriptId) {
+            const consoleEl = document.getElementById(`console_${scriptId}`);
+            const outputEl = consoleEl.querySelector('.console-output');
+            const foldBtn = document.getElementById(`fold_${scriptId}`);
+            const isFolded = outputEl.classList.toggle('folded');
+            foldBtn.innerText = isFolded ? '▶' : '▼';
         }
 
         let dragCounter = 0;

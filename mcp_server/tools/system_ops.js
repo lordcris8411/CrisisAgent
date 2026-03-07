@@ -30,11 +30,6 @@ const definitions =
     description: "Execute a shell command in the background without waiting for it to finish.",
     inputSchema: { type: "object", properties: { command: { type: "string" }, cwd: { type: "string" } }, required: ["command"] }
   },
-  {
-    name: "run_script_file",
-    description: "Execute a named JavaScript file from the 'scripts/' directory and return the output.",
-    inputSchema: { type: "object", properties: { name: { type: "string", description: "The filename of the script (e.g., 'get_network_info.js')" } }, required: ["name"] }
-  },
   { name: "wait", description: "Pause server execution for X milliseconds. Useful between UI actions.", inputSchema: { type: "object", properties: { ms: { type: "integer", description: "Duration in milliseconds" } }, required: ["ms"] } }
 ];
 
@@ -83,23 +78,6 @@ async function handle(name, args)
       catch (e)
       {
         return { isError: true, content: [{ type: "text", text: `Failed to start background command: ${e.message}` }] };
-      }
-    }
-
-    case "run_script_file":
-    {
-      try
-      {
-        const scriptsDir = path.join(__dirname, '../scripts');
-        const scriptPath = path.join(scriptsDir, args.name);
-        if (!fs.existsSync(scriptPath)) throw new Error(`Script file '${args.name}' not found in scripts/ directory.`);
-        
-        const output = execSync(`node "${scriptPath}"`, { encoding: 'utf8' });
-        return { content: [{ type: "text", text: output || "(No output)" }] };
-      }
-      catch (e)
-      {
-        return { isError: true, content: [{ type: "text", text: `Script execution failed: ${e.message}` }] };
       }
     }
 
