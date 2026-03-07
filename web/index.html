@@ -7,6 +7,7 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         :root {
             --bg-dark: #0d0f12;
@@ -17,6 +18,16 @@
             --bg-thought: #1e293b;
             --border: #1e293b;
             --bg-code: #0f172a;
+
+            /* Industry Standard File Colors */
+            --file-pdf: #ef4444;
+            --file-doc: #3b82f6;
+            --file-xls: #22c55e;
+            --file-ppt: #f97316;
+            --file-code: #f59e0b;
+            --file-zip: #a855f7;
+            --file-media: #ec4899;
+            --file-default: #94a3b8;
         }
 
         /* Custom Scrollbar */
@@ -47,11 +58,65 @@
             display: flex; flex-direction: column; padding: 20px;
         }
 
-        .brand { font-size: 1.2rem; font-weight: 600; color: var(--accent-main); margin-bottom: 30px; letter-spacing: 2px; }
+        .brand { font-size: 1.2rem; font-weight: 600; color: var(--accent-main); margin-bottom: 20px; letter-spacing: 2px; }
 
-        .stats-card { background: rgba(255,255,255,0.01); border-radius: 0; padding: 15px; margin-bottom: 20px; border: 1px solid var(--border); }
-        .stat-item { font-size: 0.85rem; margin-bottom: 8px; color: var(--text-dim); }
-        .stat-value { color: var(--text-main); font-weight: 500; }
+        .stats-card { 
+            background: rgba(255,255,255,0.02); 
+            border: 1px solid var(--border); 
+            padding: 12px 15px; 
+            margin-bottom: 15px;
+        }
+        .stats-title {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            color: var(--accent-main);
+            margin-bottom: 12px;
+            letter-spacing: 1.5px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .stats-title svg { opacity: 0.7; }
+        
+        .stat-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .stat-item { 
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .stat-label { 
+            font-size: 0.6rem; 
+            color: var(--text-dim); 
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .stat-value { 
+            font-size: 0.85rem;
+            color: var(--text-main); 
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .stat-full { grid-column: span 2; }
+
+        .model-box {
+            background: rgba(0,0,0,0.2);
+            padding: 10px;
+            margin-top: 8px;
+            border-left: 2px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .model-box:hover { border-color: var(--accent-main); }
+        .model-tag { font-size: 0.6rem; color: var(--accent-main); font-weight: bold; }
+        .model-address { font-size: 0.7rem; color: var(--text-dim); font-weight: 500; }
 
         #skill-manager {
             margin-top: 20px;
@@ -271,7 +336,13 @@
             position: relative; align-items: center; gap: 15px;
         }
         #image-preview { width: 64px; height: 64px; border-radius: 0; border: 1px solid var(--border); object-fit: cover; }
-        #file-icon { font-size: 1.5rem; width: 64px; height: 64px; display: flex; justify-content: center; align-items: center; background: rgba(255,255,255,0.02); border-radius: 0; border: 1px solid var(--border); }
+        #file-icon { 
+            width: 64px; height: 64px; 
+            display: flex; justify-content: center; align-items: center; 
+            background: rgba(255,255,255,0.02); border-radius: 0; 
+            border: 1px solid var(--border);
+        }
+        #file-icon svg { width: 32px; height: 32px; stroke-width: 1.5px; }
         #file-meta { font-size: 0.85rem; color: var(--text-dim); font-family: 'Inter', sans-serif; }
         
         .remove-img { 
@@ -371,37 +442,57 @@
                     </g>
                 </svg>
             </div>
-            <div class="stats-card">
-                        <!-- I -->
-                        <path d="M35 4H39V28H35V4Z"/>
-                        <!-- S (全高修复) -->
-                        <path d="M55 4H41V14H49V18H41V28H55V18H47V14H55V4Z"/>
-                        <!-- I -->
-                        <path d="M59 4H63V28H59V4Z"/>
-                        <!-- S (全高修复) -->
-                        <path d="M79 4H65V14H73V18H65V28H79V18H71V14H79V4Z"/>
-                        
-                        <!-- 分隔块 -->
-                        <rect x="84" y="4" width="2" height="24" opacity="0.3"/>
-
-                        <!-- AGENT -->
-                        <!-- A -->
-                        <path d="M98 4H92V28H96V18H100V28H104V4H98ZM96 14V8H100V14H96Z"/>
-                        <!-- G -->
-                        <path d="M118 4H108V28H118V16H113V20H114V24H112V10H118V4Z"/>
-                        <!-- E -->
-                        <path d="M122 4V28H132V22H126V18H130V14H126V10H132V4H122Z"/>
-                        <!-- N -->
-                        <path d="M136 4V28H140V12L144 28H148V4H144V20L136 4H132Z"/>
-                        <!-- T -->
-                        <path d="M152 4V8H156V28H160V8H164V4H152Z"/>
-                    </g>
-                </svg>
+            <div class="stats-card" id="connection-stats">
+                <div class="stats-title">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg>
+                    System Status
+                </div>
+                <div class="stat-grid">
+                    <div class="stat-item">
+                        <span class="stat-label">Address</span>
+                        <span id="conn-ip" class="stat-value">...</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Port</span>
+                        <span id="conn-port" class="stat-value">...</span>
+                    </div>
+                    <div class="stat-item stat-full">
+                        <span class="stat-label">Uptime</span>
+                        <span id="conn-uptime" class="stat-value">0s</span>
+                    </div>
+                </div>
             </div>
+
             <div class="stats-card">
-                <div class="stat-item">Tokens: <span id="total-tokens" class="stat-value">0</span></div>
-                <div class="stat-item">Prompt: <span id="prompt-tokens" class="stat-value">0</span></div>
-                <div class="stat-item">Resp: <span id="response-tokens" class="stat-value">0</span></div>
+                <div class="stats-title">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>
+                    AI Architecture
+                </div>
+                <div class="model-box">
+                    <span class="model-tag">CLI</span>
+                    <span id="cli-model" class="model-address">...</span>
+                </div>
+                <div class="model-box">
+                    <span class="model-tag">EXEC</span>
+                    <span id="exec-model" class="model-address">...</span>
+                </div>
+                
+                <div style="border-top: 1px solid var(--border); margin: 15px 0 12px 0;"></div>
+                
+                <div class="stat-grid">
+                    <div class="stat-item stat-full">
+                        <span class="stat-label">Total Tokens</span>
+                        <span id="total-tokens" class="stat-value">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Prompt</span>
+                        <span id="prompt-tokens" class="stat-value">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Response</span>
+                        <span id="response-tokens" class="stat-value">0</span>
+                    </div>
+                </div>
             </div>
             <button class="action-btn" onclick="sendCommand('/reset')">🔄 Reset Session</button>
             <button class="action-btn" onclick="sendCommand('/reboot')">🔌 Reboot System</button>
@@ -420,7 +511,10 @@
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                     </button>
                 </div>
-                <span id="file-meta">File attached</span>
+                <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+                    <span id="file-meta">File attached</span>
+                    <button id="push-btn" onclick="pushFileToServer()" style="width: fit-content; background: transparent; border: 1px solid var(--border); color: var(--accent-main); font-size: 0.7rem; padding: 2px 8px; cursor: pointer; text-transform: uppercase; letter-spacing: 1px;">Push to Server</button>
+                </div>
             </div>
             <div id="input-container">
                 <div class="input-wrapper-outer">
@@ -580,6 +674,18 @@
         let currentAssistantMsg = null;
         let currentRawContent = "";
         let reconnectTimer = null;
+        let connectionStartTime = null;
+        let uptimeInterval = null;
+        let logTimerId = null;
+
+        function updateUptime() {
+            if (!connectionStartTime) return;
+            const elapsed = Math.floor((Date.now() - connectionStartTime) / 1000);
+            const h = Math.floor(elapsed / 3600);
+            const m = Math.floor((elapsed % 3600) / 60);
+            const s = elapsed % 60;
+            document.getElementById('conn-uptime').innerText = `${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${s}s`;
+        }
 
         function connect() {
             if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
@@ -588,6 +694,13 @@
             
             socket.onopen = () => { 
                 console.log("WebSocket connected");
+                connectionStartTime = Date.now();
+                if (uptimeInterval) clearInterval(uptimeInterval);
+                uptimeInterval = setInterval(updateUptime, 1000);
+
+                document.getElementById('conn-ip').innerText = window.location.hostname;
+                document.getElementById('conn-port').innerText = window.location.port || '80';
+
                 fetchSkills(); 
                 // 如果当前有重启遮罩，连接成功后移除它
                 if (localStorage.getItem('reboot_start')) {
@@ -599,6 +712,8 @@
 
             socket.onclose = () => { 
                 console.log("WebSocket closed. Retrying in 2s...");
+                connectionStartTime = null;
+                if (uptimeInterval) clearInterval(uptimeInterval);
                 // 只要连接断开，就启动重连定时器
                 if (!reconnectTimer) {
                     reconnectTimer = setTimeout(connect, 2000);
@@ -617,6 +732,14 @@
                 else if (data.type === 'config') {
                     const cliToggle = document.getElementById('cli-think-toggle');
                     if (cliToggle) cliToggle.checked = data.cli_think;
+                    
+                    if (data.cli_model) document.getElementById('cli-model').innerText = data.cli_model;
+                    if (data.exec_model) document.getElementById('exec-model').innerText = data.exec_model;
+                    if (data.tokens) {
+                        document.getElementById('total-tokens').innerText = data.tokens.total || 0;
+                        document.getElementById('prompt-tokens').innerText = data.tokens.prompt || 0;
+                        document.getElementById('response-tokens').innerText = data.tokens.response || 0;
+                    }
                 }
                 else if (data.type === 'console_log' || data.type === 'console_log_stream') {
                     const isStream = data.type === 'console_log_stream';
@@ -655,7 +778,7 @@
                         header.className = 'log-header';
                         // 强制默认折叠
                         const defaultCollapsed = true;
-                        header.innerHTML = `<span class="log-toggle">▶</span> <span class="log-label">Executor output</span><div class="log-status"><div class="spinner-micro"></div></div>`;
+                        header.innerHTML = `<span class="log-toggle">▶</span> <span class="log-label">Executor output</span> <span class="log-duration" style="margin-left: 8px; opacity: 0.6; font-size: 0.7rem; font-weight: normal;">(0.0s)</span> <div class="log-status"><div class="spinner-micro"></div></div>`;
 
                         const content = document.createElement('div');
                         content.className = 'log-content';
@@ -672,20 +795,35 @@
                         wrapper.appendChild(content);
                         container.appendChild(wrapper);
                         chatHistory.appendChild(container);
+                        
                         last_div = container;
                         last_div.dataset.lastLogType = data.type;
+                        last_div.dataset.logStart = Date.now();
+
+                        // 启动计时器
+                        if (logTimerId) clearInterval(logTimerId);
+                        logTimerId = setInterval(() => {
+                            const start = parseInt(last_div.dataset.logStart);
+                            const durationEl = last_div.querySelector('.log-duration');
+                            if (durationEl) {
+                                durationEl.innerText = `(${((Date.now() - start) / 1000).toFixed(1)}s)`;
+                            }
+                        }, 100);
                     }
                     chatHistory.scrollTop = chatHistory.scrollHeight;
                 }
                 else if (data.type === 'stream_start') { 
                     currentAssistantMsg = null; currentRawContent = ""; last_div = null; setGenerating(true); 
+                    if (logTimerId) { clearInterval(logTimerId); logTimerId = null; }
                 } 
                 else if (data.type === 'stream_end') { 
                     currentAssistantMsg = null; currentRawContent = ""; setGenerating(false); 
+                    if (logTimerId) { clearInterval(logTimerId); logTimerId = null; }
                     // 移除所有日志容器中的 spinner
                     document.querySelectorAll('.log-status').forEach(s => s.innerHTML = '');
                 } 
                 else if (data.type === 'stream_chunk') {
+                    if (logTimerId) { clearInterval(logTimerId); logTimerId = null; }
                     if (!currentAssistantMsg) { 
                         const wrapper = document.createElement('div');
                         wrapper.className = 'message-container';
@@ -727,6 +865,7 @@
         let pendingFileBase64 = null;
         let pendingFileName = "";
         let pendingFileType = "";
+        let pendingFileRaw = null; // 存储原始 File 对象用于流式传输
         let isGenerating = false;
 
         function setGenerating(status) {
@@ -737,9 +876,26 @@
             else { btn.innerText = 'Send'; btn.classList.remove('stop'); }
         }
 
+        function getFileIcon(file) {
+            const name = file.name.toLowerCase();
+            const type = file.type.toLowerCase();
+            
+            if (type.includes('pdf')) return { icon: 'file-text', color: 'var(--file-pdf)' };
+            if (type.includes('word') || name.endsWith('.doc') || name.endsWith('.docx')) return { icon: 'file-text', color: 'var(--file-doc)' };
+            if (type.includes('excel') || type.includes('spreadsheet') || name.endsWith('.xls') || name.endsWith('.xlsx') || name.endsWith('.csv')) return { icon: 'file-spreadsheet', color: 'var(--file-xls)' };
+            if (type.includes('presentation') || name.endsWith('.ppt') || name.endsWith('.pptx')) return { icon: 'presentation', color: 'var(--file-ppt)' };
+            if (type.includes('zip') || type.includes('rar') || type.includes('archive') || name.endsWith('.7z') || name.endsWith('.tar') || name.endsWith('.gz')) return { icon: 'file-archive', color: 'var(--file-zip)' };
+            if (type.includes('audio') || name.endsWith('.mp3') || name.endsWith('.wav') || name.endsWith('.ogg')) return { icon: 'music', color: 'var(--file-media)' };
+            if (type.includes('video') || name.endsWith('.mp4') || name.endsWith('.mkv') || name.endsWith('.avi')) return { icon: 'video', color: 'var(--file-media)' };
+            if (type.includes('javascript') || type.includes('typescript') || type.includes('json') || type.includes('html') || type.includes('css') || 
+                name.endsWith('.js') || name.endsWith('.ts') || name.endsWith('.py') || name.endsWith('.cpp') || name.endsWith('.java') || name.endsWith('.go') || name.endsWith('.rs')) return { icon: 'file-code', color: 'var(--file-code)' };
+            return { icon: 'file', color: 'var(--file-default)' };
+        }
+
         function handleFile(inputOrFile) {
             const file = inputOrFile instanceof File ? inputOrFile : inputOrFile.files[0];
             if (!file) return;
+            pendingFileRaw = file; // 保存原始对象
             pendingFileName = file.name; pendingFileType = file.type;
             const reader = new FileReader();
             reader.onload = (e) => {
@@ -747,8 +903,18 @@
                 const previewImg = document.getElementById('image-preview');
                 const fileIcon = document.getElementById('file-icon');
                 const fileMeta = document.getElementById('file-meta');
-                if (file.type.startsWith('image/')) { previewImg.src = e.target.result; previewImg.style.display = 'block'; fileIcon.style.display = 'none'; }
-                else { previewImg.style.display = 'none'; fileIcon.style.display = 'block'; }
+                if (file.type.startsWith('image/')) { 
+                    previewImg.src = e.target.result; 
+                    previewImg.style.display = 'block'; 
+                    fileIcon.style.display = 'none'; 
+                }
+                else { 
+                    previewImg.style.display = 'none'; 
+                    fileIcon.style.display = 'flex';
+                    const { icon, color } = getFileIcon(file);
+                    fileIcon.innerHTML = `<i data-lucide="${icon}" style="color: ${color}"></i>`;
+                    lucide.createIcons();
+                }
                 fileMeta.innerText = `${file.name} (${(file.size/1024).toFixed(1)} KB)`;
                 document.getElementById('image-preview-container').style.display = 'flex';
             };
@@ -756,9 +922,63 @@
         }
 
         function clearFile() {
-            pendingFileBase64 = null; pendingFileName = ""; pendingFileType = "";
+            pendingFileBase64 = null; pendingFileName = ""; pendingFileType = ""; pendingFileRaw = null;
             document.getElementById('file-input').value = '';
             document.getElementById('image-preview-container').style.display = 'none';
+            const pushBtn = document.getElementById('push-btn');
+            pushBtn.innerText = 'Push to Server';
+            pushBtn.disabled = false;
+            pushBtn.style.borderColor = 'var(--border)';
+            pushBtn.style.color = 'var(--accent-main)';
+        }
+
+        async function pushFileToServer() {
+            if (!pendingFileRaw && !pendingFileBase64) return;
+            const btn = document.getElementById('push-btn');
+            const originalText = btn.innerText;
+            btn.innerText = 'Pushing...';
+            btn.disabled = true;
+
+            try {
+                let res;
+                if (pendingFileRaw) {
+                    // 优先使用流式二进制上传
+                    res = await fetch('/api/upload_binary', {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/octet-stream',
+                            'X-File-Name': encodeURIComponent(pendingFileName)
+                        },
+                        body: pendingFileRaw
+                    });
+                } else {
+                    // 回退方案
+                    res = await fetch('/api/save_attachment', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: pendingFileName, data: pendingFileBase64, type: pendingFileType })
+                    });
+                }
+                const data = await res.json();
+                if (data.success) {
+                    btn.innerText = 'Saved!';
+                    btn.style.borderColor = 'var(--file-xls)';
+                    btn.style.color = 'var(--file-xls)';
+                } else {
+                    throw new Error(data.error);
+                }
+            } catch (e) {
+                console.error('Push failed:', e);
+                btn.innerText = 'Error';
+                btn.style.borderColor = 'var(--file-pdf)';
+                btn.style.color = 'var(--file-pdf)';
+                setTimeout(() => {
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                    btn.style.borderColor = 'var(--border)';
+                    btn.style.color = 'var(--accent-main)';
+                }, 2000);
+            }
         }
 
         function appendMessage(msg) {

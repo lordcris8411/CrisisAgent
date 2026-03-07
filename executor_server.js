@@ -77,15 +77,18 @@ const localTools = [
     inputSchema: { 
       type: "object", 
       properties: { 
-        image_index: { type: "integer", description: "Index of the image in the current message (0 for the first/only image)." },
-        local_path: { type: "string", description: "Target local path (e.g., 'C:/my_images/test.jpg' or './uploads/test.jpg')." }
-      }, 
-      required: ["image_index"] 
+        image_index: { type: "integer", description: "Index of the image (0-based). Optional if only one image exists." },
+        local_path: { type: "string", description: "Target local path (e.g., 'C:/my_images/test.jpg')." }
+      }
     },
     handler: async (args, sessionImages) => {
       try {
-        if (!sessionImages || sessionImages[args.image_index] === undefined) {
-          throw new Error(`No image found at index ${args.image_index}.`);
+        // 智能容错：如果未提供索引且只有一张图，默认使用 0
+        let idx = args.image_index;
+        if (idx === undefined && sessionImages && sessionImages.length === 1) idx = 0;
+        
+        if (!sessionImages || idx === undefined || sessionImages[idx] === undefined) {
+          throw new Error(`No image found at index ${idx}. Available: ${sessionImages ? sessionImages.length : 0}`);
         }
 
         let targetPath = args.local_path || args.path || args.destination;
@@ -100,7 +103,7 @@ const localTools = [
           fs.mkdirSync(path.dirname(targetPath), { recursive: true });
         }
         
-        const buffer = Buffer.from(sessionImages[args.image_index], 'base64');
+        const buffer = Buffer.from(sessionImages[idx], 'base64');
         fs.writeFileSync(targetPath, buffer);
         
         return { content: [{ type: "text", text: `SUCCESS: Image saved to local path: ${targetPath}` }] };
@@ -115,16 +118,21 @@ const localTools = [
     inputSchema: { 
       type: "object", 
       properties: { 
-        file_index: { type: "integer", description: "Index of the file in the current session (0 for the first file)." },
+        file_index: { type: "integer", description: "Index of the file (0-based). Optional if only one file exists." },
         local_path: { type: "string", description: "Target local path (e.g., 'D:/data/info.pdf')." }
-      }, 
-      required: ["file_index"] 
+      }
     },
     handler: async (args, sessionImages, sessionFiles) => {
       try {
-        if (!sessionFiles || !sessionFiles[args.file_index]) throw new Error("No file found at that index.");
-        const file = sessionFiles[args.file_index];
+        // 智能容错
+        let idx = args.file_index;
+        if (idx === undefined && sessionFiles && sessionFiles.length === 1) idx = 0;
+
+        if (!sessionFiles || idx === undefined || !sessionFiles[idx]) {
+          throw new Error(`No file found at index ${idx}. Available: ${sessionFiles ? sessionFiles.length : 0}`);
+        }
         
+        const file = sessionFiles[idx];
         let targetPath = args.local_path || args.path || args.destination;
         if (!targetPath) {
           const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -151,6 +159,37 @@ const localTools = [
       const files = fs.readdirSync(path.join(__dirname, 'mcp_server', 'tools'));
       const paths = files.map(f => `tools/${f}`).join('\n');
       return { content: [{ type: "text", text: paths }] };
+    }
+  },
+  {
+    name: "get_tool_usage",
+    description: "Retrieve the full JSON Schema (parameters) for a specific tool. Mandatory before using any 'SCHEMA HIDDEN' tools.",
+    inputSchema: { 
+      type: "object", 
+      properties: { 
+        tool_name: { type: "string", description: "The name of the tool to research." } 
+      }, 
+      required: ["tool_name"] 
+    },
+    handler: async (args) => {
+      // 优先检查是否是本地工具
+      const localTarget = localTools.find(t => t.name === args.tool_name);
+      if (localTarget) {
+        return { content: [{ type: "text", text: `Tool: ${localTarget.name}\nDescription: ${localTarget.description}\nSchema: ${JSON.stringify(localTarget.inputSchema, null, 2)}` }] };
+      }
+
+      // 如果不是本地工具，则尝试从远程 MCP 获取并同步解锁状态
+      try {
+        const toolRes = await fetch(`${CONFIG.RESOURCE_MCP_URL}/call`, { 
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json' }, 
+          body: JSON.stringify({ name: 'get_tool_usage', arguments: { tool_name: args.tool_name } }) 
+        });
+        const toolData = await toolRes.json();
+        return toolData;
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: `Remote Discovery Error: ${e.message}` }] };
+      }
     }
   }
 ];
@@ -193,13 +232,13 @@ async function runStatelessLLM(skill, userInstruction, images = [], files = [])
   const authorizedToolsRaw = allAvailableTools.filter(t => authorizedNames.includes(t.name));
   
   // 核心：强制执行“先研究再执行”协议
+  // 无论工具是来自远程 MCP 还是本地 Executor，初始 Schema 全部隐藏
   const authorizedTools = authorizedToolsRaw.map(t => {
     if (t.name === "get_tool_usage") {
       // 只有查询工具保留完整 Schema
       return { type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } };
     } else {
-      // 其他工具只提供名字和描述，将参数定义设为“待查阅”状态
-      // 使用一个允许任何属性的空 Schema 诱导模型去查询，或者明确告诉它参数是隐藏的
+      // 所有业务工具（包括 localTools）参数全部隐藏
       return { 
         type: 'function', 
         function: { 
@@ -219,8 +258,16 @@ async function runStatelessLLM(skill, userInstruction, images = [], files = [])
     // 注入当前系统环境上下文
     expertSystemPrompt += `\n\n### CURRENT SYSTEM ENVIRONMENT CONTEXT\n${cachedEnvInfo}`;
   } catch (e) {
-    // 降级方案
-    expertSystemPrompt = `${skill.system}\n\n### CURRENT SYSTEM ENVIRONMENT CONTEXT\n${cachedEnvInfo}\n\n### MANDATORY ARCHITECTURAL PROTOCOL\n1. TOOL DISCOVERY: To minimize errors, tool parameters are HIDDEN by default. \n2. RESEARCH REQUIREMENT: You MUST call 'get_tool_usage' for any tool you wish to use. This will return the correct JSON Schema.\n3. ZERO GUESSING: Do not attempt to guess parameters. If you call a tool with incorrect or guessed arguments, the system will reject it.\n4. RESILIENCE: If a tool call is BLOCKED or rejected, DO NOT give up. Read the returned hint and RETRY immediately.`;
+    expertSystemPrompt = `${skill.system}\n\n### CURRENT SYSTEM ENVIRONMENT CONTEXT\n${cachedEnvInfo}`;
+  }
+
+  // 注入附件上下文提示，防止 AI 盲目调用保存工具
+  if (images && images.length > 0) {
+    expertSystemPrompt += `\n\n[ATTACHMENT ALERT: VISION READY] ${images.length} image(s) have been loaded into your visual context. You can SEE and ANALYZE them directly. Do NOT use 'save_uploaded_image' unless the user explicitly asks to store them on disk.`;
+  }
+  if (files && files.length > 0) {
+    const fileList = files.map(f => f.name).join(', ');
+    expertSystemPrompt += `\n\n[ATTACHMENT ALERT: SESSION FILES] The following files are available for this session: ${fileList}. You can refer to them by name.`;
   }
 
   let userMsg = { role: 'user', content: userInstruction };

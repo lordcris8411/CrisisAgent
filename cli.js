@@ -42,13 +42,57 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // API 路由
 app.post('/api/log', (req, res) => {
   const { content, type } = req.body;
   logToWeb(content, type);
   res.sendStatus(200);
+});
+
+app.post('/api/save_attachment', (req, res) => {
+  try {
+    const { name, data, type } = req.body;
+    if (!name || !data) return res.status(400).json({ error: 'Missing name or data' });
+
+    const uploadsDir = path.join(__dirname, 'uploads');
+    if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+    const filePath = path.join(uploadsDir, name);
+    fs.writeFileSync(filePath, Buffer.from(data, 'base64'));
+    
+    console.log(`${STYLES.green}[Storage] File saved (Base64): ${filePath}${STYLES.reset}`);
+    res.json({ success: true, path: filePath });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 流式二进制上传接口
+app.post('/api/upload_binary', (req, res) => {
+  const rawFileName = req.headers['x-file-name'];
+  if (!rawFileName) return res.status(400).json({ error: 'Missing x-file-name header' });
+
+  const fileName = decodeURIComponent(rawFileName);
+  const uploadsDir = path.join(__dirname, 'uploads');
+  if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+  const filePath = path.join(uploadsDir, fileName);
+  const writeStream = fs.createWriteStream(filePath);
+
+  req.pipe(writeStream);
+
+  writeStream.on('finish', () => {
+    console.log(`${STYLES.green}[Storage] File saved (Stream): ${filePath}${STYLES.reset}`);
+    res.json({ success: true, path: filePath });
+  });
+
+  writeStream.on('error', (err) => {
+    console.error(`${STYLES.red}[Storage] Stream Save Error: ${err.message}${STYLES.reset}`);
+    res.status(500).json({ error: err.message });
+  });
 });
 
 app.get('/api/skills', async (req, res) => {
@@ -112,7 +156,7 @@ wss.on('connection', (ws) => {
     }
   });
   ws.send(JSON.stringify({ type: 'history', history }));
-  broadcastTokens();
+  broadcastConfig();
   broadcastConfig();
 });
 
@@ -122,12 +166,19 @@ function broadcast(data) {
   });
 }
 
-function broadcastTokens() {
-  broadcast({ type: 'tokens', total: totalPromptTokens + totalResponseTokens, prompt: totalPromptTokens, response: totalResponseTokens });
-}
-
 function broadcastConfig() {
-  broadcast({ type: 'config', cli_think: CONFIG.CLI_THINK, exec_think: CONFIG.EXECUTOR_THINK });
+  broadcast({ 
+    type: 'config', 
+    cli_think: CONFIG.CLI_THINK, 
+    exec_think: CONFIG.EXECUTOR_THINK,
+    cli_model: `${CONFIG.CLI_LLM.MODEL} (${CONFIG.CLI_LLM.HOST})`,
+    exec_model: `${CONFIG.EXECUTOR_LLM.MODEL} (${CONFIG.EXECUTOR_LLM.HOST})`,
+    tokens: {
+      total: totalPromptTokens + totalResponseTokens,
+      prompt: totalPromptTokens,
+      response: totalResponseTokens
+    }
+  });
 }
 
 function logToWeb(content, type = 'console_log') {
@@ -167,7 +218,8 @@ async function chat(input, images = [], files = [], imageNames = []) {
     
     // 如果当前轮次包含图片或文件，强制要求委派并明确语义
     if ((images && images.length > 0) || (files && files.length > 0)) {
-      systemPrompt += "\n\nCRITICAL: The current message contains attachments. You MUST use 'delegate_task' to pass this to the Executor for processing. \nWARNING: The user's 'Push' or 'Save' command refers to saving these attachments to the local machine.";
+      systemPrompt += "\n\nCRITICAL: The current message contains attachments (images/files). You MUST use 'delegate_task' to pass the user request to the Executor.";
+      systemPrompt += "\nNOTE: For analysis/vision tasks, the Executor will automatically receive these attachments in its context. DO NOT ask to 'save' them unless the user specifically uses words like 'Save', 'Push', 'Store' or 'Download'.";
     }
 
     const messages = [{ role: 'system', content: systemPrompt }, ...history.filter(m => m.role !== 'system')];
@@ -231,7 +283,7 @@ async function chat(input, images = [], files = [], imageNames = []) {
               if (data.done) {
                 if (data.prompt_eval_count) totalPromptTokens += data.prompt_eval_count;
                 if (data.eval_count) totalResponseTokens += data.eval_count;
-                broadcastTokens();
+                broadcastConfig();
               }
             } catch (e) {}
           }
@@ -250,16 +302,35 @@ async function chat(input, images = [], files = [], imageNames = []) {
                 try {
                   let taskInstruction = call.function.arguments.task;
                   
-                            // 如果有附件，在指令头部注入元数据提示
-                            if (files && files.length > 0) {
-                              const fileList = files.map(f => f.name).join(', ');
-                              taskInstruction = `[SESSION_FILES: ${fileList}] ${taskInstruction}`;
-                            }
-                            if (images && images.length > 0) {
-                              const nameList = imageNames.join(', ') || 'unnamed';
-                              taskInstruction = `[SESSION_IMAGES: ${nameList}] ${taskInstruction}`;
-                            }
-                                    const logMsg = `[CLI] Routing to Executor: ${call.function.name}`;
+                  // 附件追溯逻辑：如果当前没有新附件，尝试从历史记录中寻找最近的附件
+                  let activeImages = images && images.length > 0 ? images : [];
+                  let activeFiles = files && files.length > 0 ? files : [];
+                  let activeImageNames = imageNames && imageNames.length > 0 ? imageNames : [];
+
+                  if (activeImages.length === 0 || activeFiles.length === 0) {
+                    for (let i = history.length - 1; i >= 0; i--) {
+                      const msg = history[i];
+                      if (activeImages.length === 0 && msg.images && msg.images.length > 0) {
+                        activeImages = msg.images;
+                      }
+                      if (activeFiles.length === 0 && msg.files && msg.files.length > 0) {
+                        activeFiles = msg.files;
+                      }
+                      if (activeImages.length > 0 && activeFiles.length > 0) break;
+                    }
+                  }
+
+                  // 如果有附件，在指令头部注入元数据提示
+                  if (activeFiles.length > 0) {
+                    const fileList = activeFiles.map(f => f.name).join(', ');
+                    taskInstruction = `[SESSION_FILES: ${fileList}] ${taskInstruction}`;
+                  }
+                  if (activeImages.length > 0) {
+                    const nameList = activeImageNames.join(', ') || 'unnamed';
+                    taskInstruction = `[SESSION_IMAGES: ${nameList}] ${taskInstruction}`;
+                  }
+                  
+                  const logMsg = `[CLI] Routing to Executor: ${call.function.name}`;
                   console.log(`\n${STYLES.dim}${logMsg}${STYLES.reset}`);
                   logToWeb(logMsg);
         
@@ -268,9 +339,9 @@ async function chat(input, images = [], files = [], imageNames = []) {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                       name: call.function.name, 
-                      arguments: { ...call.function.arguments, task: taskInstruction }, // 使用增强后的指令
-                      images: images,
-                      files: files 
+                      arguments: { ...call.function.arguments, task: taskInstruction },
+                      images: activeImages, // 使用追溯后的附件
+                      files: activeFiles    // 使用追溯后的附件
                     }),
                     signal: currentAbortController.signal
                   });
@@ -280,7 +351,7 @@ async function chat(input, images = [], files = [], imageNames = []) {
             if (skillData.tokens) {
               totalPromptTokens += (skillData.tokens.prompt || 0);
               totalResponseTokens += (skillData.tokens.completion || 0);
-              broadcastTokens();
+              broadcastConfig();
             }
 
                       if (skillData.images) {
@@ -334,7 +405,7 @@ async function processInput(line, source = 'terminal', images = [], files = [], 
   }
   else if (input === '/reset') {
     history = []; totalPromptTokens = 0; totalResponseTokens = 0;
-    broadcast({ type: 'history', history: [] }); broadcastTokens();
+    broadcast({ type: 'history', history: [] }); broadcastConfig();
     console.log('Session Reset.');
     broadcast({ type: 'stream_end' });
   }

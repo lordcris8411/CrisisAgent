@@ -1,3 +1,4 @@
+console.log(`Operation Time: 2026-03-07 20:01:45`);
 const fs = require('fs');
 const path = require('path');
 
