@@ -12,29 +12,40 @@ At its heart, Crisis Agent uses advanced AI reasoning to:
 
 ## 🏗️ Architecture
 
-1.  **CLI (Commander)**: The primary user interface. Manages conversation history, token usage, and delegates high-level tasks to the Executor.
-2.  **Executor (Dispatcher & Expert)**: An intelligent routing layer that selects the best "Skill" for a task and spawns specialized AI agents to execute them.
-3.  **Resource MCP (Capabilities)**: A robust server providing atomic system tools such as File I/O, Screen Capture, Desktop Automation, and SSH connectivity.
+Crisis Agent operates using a distributed **Master-Node** (Client-Server) model:
+
+### 1. Control Center (Client Side)
+- **CLI (`cli.js`)**: The "Commander". Manages user sessions, maintains conversation history, and provides the Web Console.
+- **Updater Client (`updater_client.js`)**: Orchestrates code synchronization. It can push updates to multiple remote servers, supporting scoped updates (Full, Prompt-only, or Web-only).
+
+### 2. Execution Node (Server Side)
+- **Executor Server (`executor_server.js`)**: The "Intelligent Router". Receives tasks from the CLI, selects appropriate skills, and spawns expert AI instances to execute them.
+- **Resource MCP (`mcp_server.js`)**: The "Capability Provider". A robust worker server that interacts directly with the operating system (File I/O, Shell, Automation).
+- **Updater Server (`updater_server.js`)**: Receives code payloads from the client and performs self-updates and system reboots.
+
+## ⚙️ Configuration (`config.json`)
+
+The system's behavior is governed by `config.json`. Key fields include:
+- **`CLI_LLM`**: LLM host and model for the Commander layer (logic and reasoning).
+- **`EXECUTOR_LLM`**: LLM host and model for the Execution layer (task execution).
+- **`RESOURCE_MCP_URL`**: The endpoint where the worker node resides.
+- **`AUTH_TOKEN`**: Secure token for authenticating updates and RPC calls.
+- **Ports**: Definitions for `EXECUTOR_PORT` (3001), `UPDATER_PORT` (3003), and MCP (3000).
+- **Thinking Toggles**: `CLI_THINK` and `EXECUTOR_THINK` to enable/disable real-time Chain-of-Thought display.
 
 ## ✨ Key Features
 
 - **Semantic Delegation**: Flexible, intent-based task handover between agent layers.
 - **Streaming Uploads**: High-performance binary streaming for large file transfers.
-- **Remote Mastery**: Built-in capabilities for managing remote systems via SSH.
-- **Modern Web Console**: A sleek, professional dark-themed UI with real-time status monitoring and professional asset visualization.
-- **Secure by Design**: Strict tool locking mechanisms and local-first execution.
-
-## 🛠️ Requirements
-
-- Node.js 18+
-- Ollama (running Qwen or similar compatible models)
-- Windows (for full automation features)
+- **Remote Mastery**: Integrated download capabilities for remote files via `Public Download URL`.
+- **Modern Web Console**: A sleek dark-themed UI with real-time status monitoring.
 
 ## 🚀 Quick Start
 
-1. Install dependencies: `npm install`
-2. Configure `config.json` with your LLM endpoints.
-3. Start the system: `npm start`
+1.  **Install**: `npm install`
+2.  **Configure**: Edit `config.json` with your LLM settings and remote URLs.
+3.  **Start**: `npm start` (Launches the full stack).
+4.  **Update**: Use `node updater_client.js` to sync code to your remote nodes.
 
 ---
 *Created by Crisis Agent Team. Built for the future of system automation.*
