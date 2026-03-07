@@ -119,25 +119,31 @@
         .model-address { font-size: 0.7rem; color: var(--text-dim); font-weight: 500; }
 
         #skill-manager {
-            margin-top: 20px;
+            margin-top: 15px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Microsoft YaHei", sans-serif;
+        }
+        #skill-list {
             flex: 1;
             overflow-y: auto;
-            border-top: 1px solid var(--border);
-            padding-top: 20px;
         }
         .skill-section-title {
             font-size: 0.75rem;
             text-transform: uppercase;
             color: var(--text-dim);
-            margin-bottom: 15px;
+            margin-bottom: 8px;
             letter-spacing: 1px;
+            font-weight: bold;
         }
         .skill-item {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 8px 0;
-            font-size: 0.9rem;
+            padding: 4px 0;
+            font-size: 0.85rem;
         }
         .skill-name { flex: 1; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .toggle-switch {
@@ -145,6 +151,7 @@
             display: inline-block;
             width: 34px;
             height: 20px;
+            margin-right: 8px;
         }
         .toggle-switch input { opacity: 0; width: 0; height: 0; }
         .slider {
@@ -168,6 +175,7 @@
             color: var(--text-main); padding: 10px; border-radius: 0;
             cursor: pointer; text-align: left; margin-bottom: 10px;
             transition: all 0.2s; font-size: 0.9rem;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Microsoft YaHei", sans-serif;
         }
         .action-btn:hover { background: var(--border); border-color: var(--accent-main); color: var(--accent-main); }
 
