@@ -12,12 +12,12 @@ const definitions =
   { name: "rename_file", description: "Change the name of a file or folder in its current directory.", inputSchema: { type: "object", properties: { path: { type: "string" }, new_name: { type: "string", description: "The new filename only, not the full path." } }, required: ["path", "new_name"] } },
   { name: "list_directory", description: "List all files and subdirectories within a specified path on the system. Defaults to the current working directory if no path is provided.", inputSchema: { type: "object", properties: { path: { type: "string", default: ".", description: "The directory to list." } } } },
   { name: "list_scripts", description: "Specialized tool to list all available JavaScript automation scripts in the 'mcp_server/scripts/' directory along with their metadata.", inputSchema: { type: "object", properties: {} } },
-  { name: "get_file_info", description: "Retrieve detailed metadata for a file or directory on the system, including size (in bytes), creation time, and last modification time.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+  { name: "get_file_info", description: "Retrieve detailed metadata for a file or directory on the system, including size (in bytes), creation time, last modification time, and a downloadable HTTP URL.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
   { name: "get_file_hash", description: "Calculate the SHA-256 hash of a file. Essential for verifying file integrity or detecting changes.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
   { name: "web_fetch", description: "Perform an HTTP GET request to fetch content from a URL. Useful for analysis, web scraping, or API debugging.", inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } }
 ];
 
-async function handle(name, args)
+async function handle(name, args, requestHost = "localhost:3000")
 {
   // Path normalization for Windows drive letters: "D:" -> "D:\"
   if (process.platform === 'win32')
@@ -98,15 +98,29 @@ async function handle(name, args)
 
     case "get_file_info":
     {
-      const stats = fs.statSync(args.path);
-      const info = [
-        `File: ${path.basename(args.path)}`,
+      const absolutePath = path.isAbsolute(args.path) ? args.path : path.resolve(args.path);
+      if (!fs.existsSync(absolutePath)) return { isError: true, content: [{ type: "text", text: `File not found: ${args.path}` }] };
+      
+      // 调试：打印接收到的 Host
+      console.log(`[DEBUG: get_file_info] Received requestHost: ${requestHost}`);
+
+      const stats = fs.statSync(absolutePath);
+      const isDir = stats.isDirectory();
+      
+      let infoLines = [
+        `File: ${path.basename(absolutePath)}`,
         `Size: ${(stats.size / 1024).toFixed(2)} KB`,
         `Created: ${stats.birthtime.toLocaleString()}`,
         `Modified: ${stats.mtime.toLocaleString()}`,
-        `Is Directory: ${stats.isDirectory()}`
-      ].join('\n');
-      return { content: [{ type: "text", text: info }] };
+        `Is Directory: ${isDir}`
+      ];
+
+      if (!isDir) {
+        const downloadUrl = `http://${requestHost}/download?path=${encodeURIComponent(absolutePath)}`;
+        infoLines.push(`Public Download URL: ${downloadUrl}`);
+      }
+
+      return { content: [{ type: "text", text: infoLines.join('\n') }] };
     }
 
     case "web_fetch":
@@ -121,8 +135,7 @@ async function handle(name, args)
           let data = "";
           res.on('data', (chunk) => { data += chunk; });
           res.on('end', () => {
-            // 简单截断超长网页，防止 Token 爆炸
-            const preview = data.length > 50000 ? data.substring(0, 50000) + '... [TRUNCATED]' : data;
+            const preview = data.length > 50000 ? data.substring(0, 50000) + "... [TRUNCATED]" : data;
             resolve({ content: [{ type: "text", text: preview }] });
           });
         }).on('error', (err) => {

@@ -4,71 +4,19 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const STYLES = { reset: '\x1b[0m', cyan: '\x1b[36m', bold: '\x1b[1m', green: '\x1b[32m', red: '\x1b[31m', dim: '\x1b[2m', yellow: '\x1b[33m' };
-
-// 加载配置
-let CONFIG = { AUTH_TOKEN: "CRISIS_AGENT_SECURE_TOKEN_2026" };
-try {
-  const configPath = path.join(__dirname, 'config.json');
-  if (fs.existsSync(configPath)) {
-    CONFIG = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    console.log(`${STYLES.green}[AUTH] Configuration loaded from config.json.${STYLES.reset}`);
-  }
-} catch (e) {
-  console.log(`${STYLES.yellow}[WARN] Error loading config.json: ${e.message}${STYLES.reset}`);
-}
-
-function safeRequire(modulePath)
-{
-  try 
-  {
-    return require(modulePath);
-  } 
-  catch (e) 
-  {
-    console.error(`${STYLES.red}[LOAD ERROR] Failed to load ${modulePath}: ${e.message}${STYLES.reset}`);
-    return { definitions: [], handle: async () => ({ isError: true, content: [{ type: 'text', text: `Module ${modulePath} failed to load: ${e.message}` }] }) };
-  }
-}
-
-const fileOps = safeRequire('./tools/file_ops');
-const systemOps = safeRequire('./tools/system_ops');
-const clipboardOps = safeRequire('./tools/clipboard_ops');
-const automationOps = safeRequire('./tools/automation_ops');
-const archiveOps = safeRequire('./tools/archive_ops');
+const STYLES = { reset: '\x1b[0m', cyan: '\x1b[36m', green: '\x1b[32m', yellow: '\x1b[33m', red: '\x1b[31m', bold: '\x1b[1m' };
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '100mb' }));
+app.use(express.json());
 
-// 基础错误处理器
-app.use((err, req, res, next) => {
-  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
-    console.error(`[SERVER] JSON Syntax Error: ${err.message}`);
-    return res.status(400).send({ isError: true, content: [{ type: 'text', text: "Invalid JSON payload" }] });
-  }
-  next();
-});
+// 动态加载工具模块
+const toolsDir = path.join(__dirname, "tools");
+const modules = fs.readdirSync(toolsDir)
+  .filter(f => f.endsWith(".js"))
+  .map(f => require(path.join(toolsDir, f)));
 
-// 设置标题
-try { if (process.platform === 'win32') execSync('title Crisis Agent MCP'); } catch (e) {}
-
-const modules = [fileOps, systemOps, clipboardOps, automationOps, archiveOps];
-const TOOL_DEFINITIONS = 
-[
-  ...fileOps.definitions,
-  ...systemOps.definitions,
-  ...clipboardOps.definitions,
-  ...automationOps.definitions,
-  ...archiveOps.definitions,
-  { 
-    name: "get_tool_usage", 
-    description: "MANDATORY Discovery Tool. Call this to retrieve the full JSON Schema, detailed descriptions, and safety requirements for any other tool before using it. This is the only way to 'unlock' a tool's parameters.", 
-    inputSchema: { type: "object", properties: { tool_name: { type: "string", description: "The name of the tool you want to research." } }, required: ["tool_name"] } 
-  }
-];
-
-// 工具激活状态追踪 (Discovery-First Protocol)
+const TOOL_DEFINITIONS = modules.flatMap(m => m.definitions);
 const activatedTools = new Set();
 
 app.get("/list", (req, res) => 
@@ -77,41 +25,55 @@ app.get("/list", (req, res) =>
   res.json({ tools: TOOL_DEFINITIONS });
 });
 
+app.get("/download", (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).send("Path is required");
+  
+  const absolutePath = path.isAbsolute(filePath) ? filePath : path.resolve(filePath);
+  
+  if (!fs.existsSync(absolutePath)) {
+    return res.status(404).send("File not found");
+  }
+
+  console.log(`${STYLES.yellow}[DOWNLOAD] Serving file: ${absolutePath}${STYLES.reset}`);
+  res.download(absolutePath, (err) => {
+    if (err) {
+      console.error(`${STYLES.red}[DOWNLOAD ERROR] ${err.message}${STYLES.reset}`);
+      if (!res.headersSent) res.status(500).send("Error downloading file");
+    }
+  });
+});
+
 app.post("/call", async (req, res) => 
 {
-  const { name, arguments: args } = req.body;
-  const time = new Date().toLocaleTimeString();
-  console.log(`${STYLES.bold}[${time}] [CALL] ${name}${STYLES.reset}`);
-  
-  if (name !== 'receive_file') console.log(`${STYLES.dim}Args: ${JSON.stringify(args)}${STYLES.reset}`);
+  const { name, arguments: args, tool_name, clientHost } = req.body;
+  const requestHost = clientHost || req.headers.host || "localhost:3000";
 
-  try
+  try 
   {
-    // --- Discovery-First Gatekeeping ---
-    if (name === "get_tool_usage")
-    {
-      const tool = TOOL_DEFINITIONS.find(t => t.name === args.tool_name);
-      if (tool) {
-        activatedTools.add(args.tool_name); // 激活该工具的使用权
-        return res.json({ 
-          content: [{ 
-            type: "text", 
-            text: `--- TOOL ACTIVATED ---\nName: ${tool.name}\nDescription: ${tool.description}\nUsage Schema: ${JSON.stringify(tool.inputSchema, null, 2)}` 
-          }] 
-        });
-      } else {
-        return res.json({ isError: true, content: [{ type: "text", text: `Tool '${args.tool_name}' not found.` }] });
-      }
+    // 处理 Discovery 协议：获取工具用法
+    if (name === "get_tool_usage") {
+      const targetName = tool_name || args?.tool_name;
+      const target = TOOL_DEFINITIONS.find(t => t.name === targetName);
+      if (!target) return res.status(404).json({ isError: true, content: [{ type: 'text', text: `Tool ${targetName} not found` }] });
+      
+      // 激活工具（解锁）
+      activatedTools.add(targetName);
+      
+      return res.json({ 
+        content: [{ 
+          type: 'text', 
+          text: `--- TOOL ACTIVATED ---\nName: ${target.name}\nDescription: ${target.description}\nUsage Schema: ${JSON.stringify(target.inputSchema, null, 2)}` 
+        }] 
+      });
     }
 
-    // 内部维护工具、环境查询和已激活工具允许执行
-    const isExempt = ["receive_file", "get_tool_usage", "get_env_info"].includes(name);
-    if (!isExempt && !activatedTools.has(name)) {
-      const lockError = `[PROTOCOL VIOLATION] Tool '${name}' is currently LOCKED. As an expert, you MUST first call 'get_tool_usage' with tool_name='${name}' to retrieve the official schema and safety constraints before you can execute it. Discovery is mandatory.`;
-      console.log(`${STYLES.red}${lockError}${STYLES.reset}`);
-      return res.json({ isError: true, content: [{ type: 'text', text: lockError }] });
+    // 安全检查：强制执行“先研究再执行”协议
+    if (!activatedTools.has(name) && name !== 'get_env_info') {
+      const msg = `[PROTOCOL VIOLATION] Tool '${name}' is currently LOCKED. As an expert, you MUST first call 'get_tool_usage' with tool_name='${name}' to retrieve the official schema and safety constraints before you can execute it. Discovery is mandatory.`;
+      console.log(`${STYLES.red}${msg}${STYLES.reset}`);
+      return res.json({ isError: true, content: [{ type: 'text', text: msg }] });
     }
-    // ----------------------------------
 
     // 寻找能处理该工具的模块
     for (const mod of modules)
@@ -120,43 +82,26 @@ app.post("/call", async (req, res) =>
       {
         try
         {
-          const result = await mod.handle(name, args);
-          console.log(`${STYLES.green}[SUCCESS] ${name} done.${STYLES.reset}`);
+          const result = await mod.handle(name, args, requestHost);
+          console.log(`${STYLES.green}[SUCCESS] ${name} executed for host: ${requestHost}${STYLES.reset}`);
           
-          // --- Auto-Relock Mechanism ---
-          // 成功调用后立即撤销激活状态，强制下一次调用前重新研究
-          if (activatedTools.has(name)) {
-            activatedTools.delete(name);
-            console.log(`${STYLES.yellow}[SECURITY] Tool '${name}' has been RE-LOCKED after use.${STYLES.reset}`);
-          }
-          // -----------------------------
-
-          // 打印返回结果简报
-          if (result.content) {
-            const textResult = result.content.filter(c => c.type === 'text').map(c => c.text).join(' ');
-            const imageCount = result.content.filter(c => c.type === 'image').length;
-            const preview = textResult.length > 100 ? textResult.substring(0, 100) + '...' : textResult;
-            if (preview) console.log(`${STYLES.dim}Result: ${preview}${STYLES.reset}`);
-            if (imageCount > 0) console.log(`${STYLES.dim}Result: [Contains ${imageCount} Image(s)]${STYLES.reset}`);
-          }
-
+          // 执行后自动重新锁定 (强制每次都要 Discovery)
+          activatedTools.delete(name);
+          
           return res.json(result);
-        }
-        catch (modErr)
-        {
-          // 捕获模块内部抛出的原始错误并返回给客户端
-          console.log(`${STYLES.red}[ERROR] ${name} inner failed: ${modErr.message}${STYLES.reset}`);
-          return res.json({ isError: true, content: [{ type: 'text', text: `Module Error: ${modErr.message}` }] });
+        } catch (e) {
+          console.error(`${STYLES.red}[TOOL ERROR] ${name}: ${e.message}${STYLES.reset}`);
+          return res.json({ isError: true, content: [{ type: 'text', text: e.message }] });
         }
       }
     }
 
-    throw new Error(`Tool '${name}' not found.`);
-  }
-  catch (e)
+    res.status(404).json({ isError: true, content: [{ type: 'text', text: `Tool ${name} not found` }] });
+  } 
+  catch (e) 
   {
-    console.log(`${STYLES.red}[ERROR] ${name} failed: ${e.message}${STYLES.reset}`);
-    res.json({ isError: true, content: [{ type: 'text', text: e.message }] });
+    console.error(`${STYLES.red}[SYSTEM ERROR] ${e.message}${STYLES.reset}`);
+    res.status(500).json({ isError: true, content: [{ type: 'text', text: e.message }] });
   }
 });
 

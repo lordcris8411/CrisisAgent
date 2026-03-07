@@ -8,10 +8,16 @@ const AUTH_TOKEN = 'CRISIS_AGENT_SECURE_TOKEN_2026';
 // ---------------------
 
 async function runUpdate() {
-    // 基础核心文件
-    const coreFiles = [
+    const args = process.argv.slice(2);
+    const mode = args.includes('--prompt') ? 'prompt' : (args.includes('--web') ? 'web' : 'full');
+    
+    console.log(`[Mode] Update scope: ${mode.toUpperCase()}`);
+
+    // 基础核心文件定义
+    const allCoreFiles = [
         'cli.js',
         'executor_server.js',
+        'mcp_server/mcp_server.js',
         'updater_server.js',
         'start.js',
         'system.md',
@@ -27,16 +33,32 @@ async function runUpdate() {
         'mcp_server/scripts'
     ];
 
-    let filesToUpdate = coreFiles.map(f => ({ path: f, localPath: `./${f}` }));
+    let filesToUpdate = [];
 
-    // 扫描并添加目录下的所有 .js 和 .func 文件
-    for (const dir of scanDirs) {
-        if (fs.existsSync(dir)) {
-            const files = fs.readdirSync(dir);
-            for (const f of files) {
-                const fullPath = path.join(dir, f);
-                if (fs.statSync(fullPath).isFile()) {
-                    filesToUpdate.push({ path: fullPath.replace(/\\/g, '/'), localPath: `./${fullPath}` });
+    // 根据模式过滤文件
+    if (mode === 'prompt') {
+        // 仅提示词相关
+        filesToUpdate.push({ path: 'system.md', localPath: './system.md' });
+        filesToUpdate.push({ path: 'exe_system.md', localPath: './exe_system.md' });
+        // 添加所有技能定义文件
+        if (fs.existsSync('functions')) {
+            const funcs = fs.readdirSync('functions').filter(f => f.endsWith('.func'));
+            funcs.forEach(f => filesToUpdate.push({ path: `functions/${f}`, localPath: `./functions/${f}` }));
+        }
+    } else if (mode === 'web') {
+        // 仅网页相关
+        filesToUpdate.push({ path: 'web/index.html', localPath: './web/index.html' });
+    } else {
+        // 全量模式
+        filesToUpdate = allCoreFiles.map(f => ({ path: f, localPath: `./${f}` }));
+        for (const dir of scanDirs) {
+            if (fs.existsSync(dir)) {
+                const files = fs.readdirSync(dir);
+                for (const f of files) {
+                    const fullPath = path.join(dir, f);
+                    if (fs.statSync(fullPath).isFile()) {
+                        filesToUpdate.push({ path: fullPath.replace(/\\/g, '/'), localPath: `./${fullPath}` });
+                    }
                 }
             }
         }
@@ -57,7 +79,7 @@ async function runUpdate() {
     }
 
     if (payload.files.length === 0) {
-        console.log("No files found to update.");
+        console.log("No files found to update for this scope.");
         return;
     }
 
@@ -74,7 +96,7 @@ async function runUpdate() {
 
         if (res.ok) {
             const data = await res.json();
-            console.log("SUCCESS: System updated and reboot triggered.");
+            console.log(`SUCCESS: System updated (${mode}) and reboot triggered.`);
             console.log("Server Logs:");
             data.logs.forEach(l => console.log(`  ${l}`));
         } else {

@@ -4,8 +4,10 @@ const path = require('path');
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
+const os = require('os');
 
 const CONFIG = JSON.parse(fs.readFileSync('config.json', 'utf8'));
+
 const STYLES = { 
   reset: '\x1b[0m', 
   cyan: '\x1b[36m', 
@@ -18,6 +20,23 @@ const STYLES = {
   white: '\x1b[37m',
   red: '\x1b[31m'
 };
+
+// 获取局域网 IP
+function getLocalIP() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      // 排除 IPv6 和回环地址
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return '127.0.0.1';
+}
+const EXTERNAL_HOST = `${getLocalIP()}:3000`;
+console.log(`${STYLES.cyan}[Network] External access IP identified as: ${EXTERNAL_HOST}${STYLES.reset}`);
+
 const rl = readline.createInterface({ 
   input: process.stdin, 
   output: process.stdout, 
@@ -330,7 +349,7 @@ async function chat(input, images = [], files = [], imageNames = []) {
                     taskInstruction = `[SESSION_IMAGES: ${nameList}] ${taskInstruction}`;
                   }
                   
-                  const logMsg = `[CLI] Routing to Executor: ${call.function.name}`;
+                  const logMsg = `[CLI] Routing to Executor: ${call.function.name} (Host: ${EXTERNAL_HOST})`;
                   console.log(`\n${STYLES.dim}${logMsg}${STYLES.reset}`);
                   logToWeb(logMsg);
         
@@ -340,8 +359,9 @@ async function chat(input, images = [], files = [], imageNames = []) {
                     body: JSON.stringify({ 
                       name: call.function.name, 
                       arguments: { ...call.function.arguments, task: taskInstruction },
-                      images: activeImages, // 使用追溯后的附件
-                      files: activeFiles    // 使用追溯后的附件
+                      images: activeImages,
+                      files: activeFiles,
+                      clientHost: EXTERNAL_HOST 
                     }),
                     signal: currentAbortController.signal
                   });

@@ -222,10 +222,14 @@ async function syncResourceTools()
   } catch (e) { console.error(`Resource MCP Error: ${e.message}`); }
 }
 
-async function runStatelessLLM(skill, userInstruction, images = [], files = [])
+async function runStatelessLLM(skill, userInstruction, images = [], files = [], clientHost)
 {
   const currentConfig = JSON.parse(fs.readFileSync('config.json', 'utf8'));
   const allAvailableTools = [...resourceTools, ...localTools];
+  
+  // 关键调试日志：验证接收到的 Host
+  const finalHost = clientHost || "localhost:3000";
+  console.log(`${STYLES.dim}[Executor] Using Client Host for URLs: ${finalHost}${STYLES.reset}`);
   
   // 筛选该技能授权的工具，并强制加入 MCP 原生的 get_tool_usage 供专家自查
   const authorizedNames = [...skill.use, "get_tool_usage"];
@@ -360,7 +364,18 @@ async function runStatelessLLM(skill, userInstruction, images = [], files = [])
           const localTool = localTools.find(t => t.name === call.function.name);
           if (localTool) toolData = await localTool.handler(call.function.arguments, images, files);
           else {
-            const toolRes = await fetch(`${CONFIG.RESOURCE_MCP_URL}/call`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: call.function.name, arguments: call.function.arguments }) });
+            // 调试日志：确认即将透传到 MCP 的 Host 值
+            console.log(`${STYLES.cyan}[Executor -> MCP] Calling '${call.function.name}' with clientHost: ${finalHost}${STYLES.reset}`);
+            
+            const toolRes = await fetch(`${CONFIG.RESOURCE_MCP_URL}/call`, { 
+              method: 'POST', 
+              headers: { 'Content-Type': 'application/json' }, 
+              body: JSON.stringify({ 
+                name: call.function.name, 
+                arguments: call.function.arguments,
+                clientHost: finalHost // 确保透传 finalHost
+              }) 
+            });
             toolData = await toolRes.json();
           }
 
@@ -396,7 +411,7 @@ async function runStatelessLLM(skill, userInstruction, images = [], files = [])
 
 app.post("/call", async (req, res) => 
 {
-  const { name, arguments: args, skill_name, images, files } = req.body;
+  const { name, arguments: args, skill_name, images, files, clientHost } = req.body;
   
   if (files && files.length > 0) {
     relayLog(`[DEBUG] /call received ${files.length} files`);
@@ -406,7 +421,7 @@ app.post("/call", async (req, res) =>
     const targetSkill = skills.find(s => s.name === skill_name);
     if (!targetSkill) return res.status(404).json({ error: `Skill '${skill_name}' not found.` });
     const instruction = args?.task || `Perform ${skill_name}`;
-    const expertRes = await runStatelessLLM(targetSkill, instruction, images, files);
+    const expertRes = await runStatelessLLM(targetSkill, instruction, images, files, clientHost);
     return res.json({ content: [{ type: "text", text: expertRes.content }], tokens: { prompt: expertRes.tokens.prompt, completion: expertRes.tokens.completion }, images: expertRes.images || [] });
   }
 
@@ -450,7 +465,7 @@ app.post("/call", async (req, res) =>
     }
 
     const bestSkill = enabledSkills.find(s => s.name === decision);
-    const expertRes = await runStatelessLLM(bestSkill, instruction, images, files);
+    const expertRes = await runStatelessLLM(bestSkill, instruction, images, files, clientHost);
     res.json({ content: [{ type: "text", text: expertRes.content }], tokens: { prompt: expertRes.tokens.prompt, completion: expertRes.tokens.completion }, images: expertRes.images || [] });
   }
   catch (e) {
