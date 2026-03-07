@@ -155,17 +155,6 @@ const localTools = [
     }
   },
   {
-    name: "list_local_tools",
-    description: "List all tool script paths in the local mcp_server 'tools' directory.",
-    inputSchema: { type: "object", properties: { } },
-    handler: async () => 
-    {
-      const files = fs.readdirSync(path.join(__dirname, 'mcp_server', 'tools'));
-      const paths = files.map(f => `tools/${f}`).join('\n');
-      return { content: [{ type: "text", text: paths }] };
-    }
-  },
-  {
     name: "get_tool_usage",
     description: "Retrieve the full JSON Schema (parameters) for a specific tool. Mandatory before using any 'SCHEMA HIDDEN' tools.",
     inputSchema: { 
@@ -500,7 +489,7 @@ app.post("/set_skill_status", (req, res) => {
   loadSkills();
   res.json({ message: "OK" });
 });
-app.get("/capabilities", (req, res) => { res.json({ summary: "Domains: File, Screen, Info, Scripting, Control." }); });
+app.get("/capabilities", (req, res) => { res.json({ summary: "Domains: File, Screen, Info, Control." }); });
 app.get("/system_prompt", (req, res) => {
   try {
     const template = fs.readFileSync('exe_system.md', 'utf8');
