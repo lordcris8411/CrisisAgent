@@ -255,6 +255,34 @@ async function handle(name, args)
       await new Promise(resolve => setTimeout(resolve, args.ms));
       return { content: [{ type: "text", text: `Waited for ${args.ms}ms.` }] };
 
+    case "run_application":
+    {
+      try
+      {
+        if (process.platform === 'win32')
+        {
+          // 使用 start 命令启动，"" 是为了处理路径中有空格的情况，避免将路径误认为窗口标题
+          const fullCmd = `start "" "${args.app_name}" ${ (args.args || []).join(' ') }`;
+          execSync(fullCmd);
+          return { content: [{ type: "text", text: `Application started via system shell: ${args.app_name}` }] };
+        }
+        else
+        {
+          const child = spawn(args.app_name, args.args || [], { 
+            detached: true, 
+            stdio: 'ignore', 
+            shell: true 
+          });
+          child.unref();
+          return { content: [{ type: "text", text: `Application started: ${args.app_name}` }] };
+        }
+      }
+      catch (e)
+      {
+        return { isError: true, content: [{ type: "text", text: `Failed to start application: ${e.message}` }] };
+      }
+    }
+
     case "capture_screen":
       const raw = await screenshot({ format: 'png' });
       const opt = await sharp(raw).jpeg({ quality: 80 }).toBuffer();
