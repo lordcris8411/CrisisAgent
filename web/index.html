@@ -1101,6 +1101,7 @@
         let connectionStartTime = null;
         let uptimeInterval = null;
         let logTimerId = null;
+        let timingDiv = null; // 专门用于计时的 DOM 目标
 
         function updateUptime() {
             if (!connectionStartTime) return;
@@ -1165,85 +1166,95 @@
                         document.getElementById('response-tokens').innerText = data.tokens.response || 0;
                     }
                 }
-                else if (data.type === 'console_log' || data.type === 'console_log_stream') {
-                    const isStream = data.type === 'console_log_stream';
+                else if (data.type === 'console_log' || data.type === 'console_log_stream' || data.type === 'console_notify') {
+                    const isNotify = data.type === 'console_notify';
                     const cleanText = data.content.replace(/\x1b\[[0-9;]*m/g, '');
                     if (!cleanText.trim()) return;
 
-                    // 处理加粗和转义的辅助函数
                     const processLogText = (txt) => {
                         const escaped = txt.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                        // 匹配 [Tool Result] 及其后的所有内容并加粗
-                        return escaped.replace(/(\[Tool Result\].*)/g, '<strong style="color:var(--accent-main);filter:brightness(1.2);">$1</strong>');
+                        return escaped.replace(/(\[(Tool Result|系统通知)\].*)/g, '<strong style="color:var(--accent-main);filter:brightness(1.2);">$1</strong>');
                     };
 
-                    // 检查上一个元素是否是日志容器
-                    if (last_div && last_div.querySelector('.log-wrapper')) {
-                        const content = last_div.querySelector('.log-content');
-                        const status = last_div.querySelector('.log-status');
-                        
-                        // 显示 loading
-                        if (status) status.innerHTML = '<div class="spinner-micro"></div>';
-                        
-                        if (data.type === 'console_log' && content.innerHTML.length > 0) {
-                            content.innerHTML += '\n';
-                        }
-                        
-                        content.innerHTML += processLogText(cleanText);
-                        last_div.dataset.lastLogType = data.type;
-                    } else {
+                    // 处理系统通知 (Notify) - 独立逻辑，不涉及计时
+                    if (isNotify) {
                         const container = document.createElement('div');
                         container.className = 'message-container';
-
                         const wrapper = document.createElement('div');
                         wrapper.className = 'log-wrapper';
-
+                        wrapper.style.borderColor = 'rgba(100, 116, 139, 0.3)';
                         const header = document.createElement('div');
                         header.className = 'log-header';
-                        // 强制默认折叠
-                        const defaultCollapsed = true;
-                        header.innerHTML = `<span class="log-toggle">▶</span> <span class="log-label">Executor output</span> <span class="log-duration" style="margin-left: 8px; opacity: 0.6; font-size: 0.7rem; font-weight: normal;">(0.0s)</span> <div class="log-status"><div class="spinner-micro"></div></div>`;
-
+                        header.innerHTML = `<span class="log-toggle">▼</span> <span class="log-label">System Notification</span>`;
                         const content = document.createElement('div');
                         content.className = 'log-content';
-                        content.style.display = 'none'; // 初始折叠
+                        content.style.display = 'block'; 
                         content.innerHTML = processLogText(cleanText);
-
                         header.onclick = () => {
                             const isHidden = content.style.display === 'none';
                             content.style.display = isHidden ? 'block' : 'none';
                             header.querySelector('.log-toggle').innerText = isHidden ? '▼' : '▶';
                         };
-
                         wrapper.appendChild(header);
                         wrapper.appendChild(content);
                         container.appendChild(wrapper);
                         chatHistory.appendChild(container);
-                        
-                        last_div = container;
-                        last_div.dataset.lastLogType = data.type;
-                        last_div.dataset.logStart = Date.now();
+                        last_div = container; // Notify 也会更新 last_div 但不更新 timingDiv
+                    } 
+                    // 处理普通日志 (Log/Stream)
+                    else {
+                        if (last_div && last_div.querySelector('.log-wrapper') && last_div.dataset.lastLogType !== 'console_notify') {
+                            const content = last_div.querySelector('.log-content');
+                            const status = last_div.querySelector('.log-status');
+                            if (status) status.innerHTML = '<div class="spinner-micro"></div>';
+                            if (data.type === 'console_log' && content.innerHTML.length > 0) content.innerHTML += '\n';
+                            content.innerHTML += processLogText(cleanText);
+                        } else {
+                            const container = document.createElement('div');
+                            container.className = 'message-container';
+                            const wrapper = document.createElement('div');
+                            wrapper.className = 'log-wrapper';
+                            const header = document.createElement('div');
+                            header.className = 'log-header';
+                            header.innerHTML = `<span class="log-toggle">▶</span> <span class="log-label">Executor output</span> <span class="log-duration" style="margin-left: 8px; opacity: 0.6; font-size: 0.7rem; font-weight: normal;">(0.0s)</span> <div class="log-status"><div class="spinner-micro"></div></div>`;
+                            const content = document.createElement('div');
+                            content.className = 'log-content';
+                            content.style.display = 'none';
+                            content.innerHTML = processLogText(cleanText);
+                            header.onclick = () => {
+                                const isHidden = content.style.display === 'none';
+                                content.style.display = isHidden ? 'block' : 'none';
+                                header.querySelector('.log-toggle').innerText = isHidden ? '▼' : '▶';
+                            };
+                            wrapper.appendChild(header);
+                            wrapper.appendChild(content);
+                            container.appendChild(wrapper);
+                            chatHistory.appendChild(container);
+                            last_div = container;
+                            timingDiv = container; // 更新计时目标
+                        }
 
                         // 启动计时器
-                        if (logTimerId) clearInterval(logTimerId);
-                        logTimerId = setInterval(() => {
-                            const start = parseInt(last_div.dataset.logStart);
-                            const durationEl = last_div.querySelector('.log-duration');
-                            if (durationEl) {
-                                durationEl.innerText = `(${((Date.now() - start) / 1000).toFixed(1)}s)`;
-                            }
-                        }, 100);
+                        if (!logTimerId) {
+                            const startTime = Date.now();
+                            logTimerId = setInterval(() => {
+                                if (timingDiv) {
+                                    const durationEl = timingDiv.querySelector('.log-duration');
+                                    if (durationEl) {
+                                        durationEl.innerText = `(${((Date.now() - startTime) / 1000).toFixed(1)}s)`;
+                                    }
+                                }
+                            }, 50);
+                        }
                     }
                     chatHistory.scrollTop = chatHistory.scrollHeight;
                 }
                 else if (data.type === 'stream_start') { 
                     currentAssistantMsg = null; currentRawContent = ""; last_div = null; setGenerating(true); 
-                    if (logTimerId) { clearInterval(logTimerId); logTimerId = null; }
                 } 
                 else if (data.type === 'stream_end') { 
                     currentAssistantMsg = null; currentRawContent = ""; setGenerating(false); 
                     if (logTimerId) { clearInterval(logTimerId); logTimerId = null; }
-                    // 移除所有日志容器中的 spinner
                     document.querySelectorAll('.log-status').forEach(s => s.innerHTML = '');
                 } 
                 else if (data.type === 'stream_chunk') {
@@ -1257,7 +1268,7 @@
                     }
                     currentRawContent += data.content; 
                     currentAssistantMsg.querySelector('.content').innerHTML = marked.parse(currentRawContent);
-                    lucide.createIcons(); // 实时扫描并生成新出现的图标
+                    lucide.createIcons();
                     chatHistory.scrollTop = chatHistory.scrollHeight;
                 } 
                 else if (data.type === 'stream_image') {
@@ -1271,6 +1282,7 @@
                     wrapper.appendChild(el);
                     chatHistory.appendChild(wrapper); chatHistory.scrollTop = chatHistory.scrollHeight;
                 } else if (data.type === 'thinking_chunk') {
+                    if (logTimerId) { clearInterval(logTimerId); logTimerId = null; }
                     if (!currentAssistantMsg) { 
                         const wrapper = document.createElement('div');
                         wrapper.className = 'message-container';
@@ -1436,16 +1448,20 @@
                     btn.style.borderColor = 'var(--file-xls)';
                     btn.style.color = 'var(--file-xls)';
                     
-                    // 关闭附件栏
+                    // 关闭附件栏并重置状态
                     setTimeout(() => {
-                        document.getElementById('attachment-bar').classList.remove('active');
+                        const previewContainer = document.getElementById('image-preview-container');
+                        if (previewContainer) {
+                            previewContainer.style.display = 'none';
+                        }
                         progressContainer.style.display = 'none';
                         progressBar.style.width = '0%';
                         pendingFileRaw = null;
                         pendingFileName = '';
+                        pendingFileBase64 = null;
                         btn.innerText = 'Push to Server';
-                        btn.style.borderColor = 'var(--cyan)';
-                        btn.style.color = 'var(--cyan)';
+                        btn.style.borderColor = 'var(--border)';
+                        btn.style.color = 'var(--accent-main)';
                     }, 1000);
                 } else {
                     btn.innerText = 'Error';

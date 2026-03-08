@@ -204,13 +204,15 @@ async function handle(name, args)
       const os = require('os');
       const userInfo = os.userInfo();
       const envVars = process.env;
+      const projectRoot = path.resolve(__dirname, '..', '..');
       
       let report = `=== System Information ===\n`;
       report += `OS Name: ${os.type()} (${os.platform()})\n`;
       report += `OS Release: ${os.release()}\n`;
       report += `Architecture: ${os.arch()}\n`;
       report += `User: ${userInfo.username}\n`;
-      report += `Home: ${userInfo.homedir}\n\n`;
+      report += `Home: ${userInfo.homedir}\n`;
+      report += `Project Root (start.js location): ${projectRoot}\n\n`;
       
       report += `Environment Variables:\n`;
       for (const [key, value] of Object.entries(envVars))

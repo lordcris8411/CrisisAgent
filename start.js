@@ -57,10 +57,28 @@ function startProcess(name, script, color, dir = '.')
     }
     else if (code !== 0 && code !== null)
     {
-      const crashMsg = `[System] ${name} crashed with code ${code}`;
+      const crashMsg = `[System] ${name} crashed with code ${code}. Supervisor will remain active.`;
       console.log(`${STYLES.red}${crashMsg}${STYLES.reset}`);
       relayLogToWeb(crashMsg);
-      process.exit(code);
+      
+      // 如果是 CLI 或 Executor 崩溃，不要退出 supervisor
+      // 这样 Updater Server 就能继续运行，允许通过远程更新来修复错误
+      if (name === 'Updater')
+      {
+        console.log(`${STYLES.red}[System] Critical: Updater crashed. Exiting supervisor.${STYLES.reset}`);
+        process.exit(code);
+      }
+      
+      // 尝试在 5 秒后重启崩溃的进程 (可选，这里先保持存活但不自动重启，或者简单重启)
+      console.log(`${STYLES.yellow}[System] Waiting 5s before attempting to restart ${name}...${STYLES.reset}`);
+      setTimeout(() => {
+        if (!isRebooting) {
+          console.log(`${STYLES.cyan}[System] Restarting ${name}...${STYLES.reset}`);
+          if (name === 'Resource MCP') mcpProcess = startProcess('Resource MCP', 'mcp_server.js', '\x1b[32m', 'mcp_server');
+          else if (name === 'Executor') executorProcess = startProcess('Executor', 'executor_server.js', STYLES.yellow);
+          else if (name === 'CLI') cliProcess = startProcess('CLI', 'cli.js', STYLES.cyan);
+        }
+      }, 5000);
     }
     else
     {

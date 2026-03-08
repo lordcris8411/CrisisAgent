@@ -107,8 +107,13 @@ app.post('/api/upload_binary', (req, res) => {
   writeStream.on('finish', () => {
     console.log(`${STYLES.green}[Storage] File saved (Stream): ${filePath}${STYLES.reset}`);
 
-    // 在上下文中增加一条完成记录
-    conversationHistory.push({ role: 'user', content: `[系统通知] 刚刚完成：push ${fileName} 到 uploads 文件夹` });
+    // 在上下文中增加一条完成记录，使用绝对路径
+    const absoluteUploadsDir = path.resolve(__dirname, 'uploads');
+    const notification = `[系统通知] 刚刚完成：push ${fileName} 到 ${absoluteUploadsDir} 文件夹`;
+    history.push({ role: 'user', content: notification });
+    
+    // 同时输出到 Web UI 的控制台日志中，使用特殊的 notify 类型以避免计时器
+    logToWeb(notification, 'console_notify');
 
     res.json({ success: true, path: filePath });
   });
