@@ -537,9 +537,9 @@ app.post("/set_skill_status", (req, res) => {
 app.get("/capabilities", (req, res) => { 
   const summary = skills
     .filter(s => s.enabled !== false)
-    .map(s => `[${s.name}]: ${s.description}`)
+    .map(s => `- ${s.description}`)
     .join('\n');
-  res.json({ summary: `Available Specialized Skills:\n${summary}\n\nGeneral Domains: File System, Desktop Vision, Hardware Monitoring, Process Control.` }); 
+  res.json({ summary: `The Executor is capable of performing the following types of tasks:\n${summary}\n\nGeneral Domains: File System (CRUD/Search), Desktop Vision, Hardware & Environment Monitoring, Process Management, and Code Engineering.` }); 
 });
 app.get("/system_prompt", (req, res) => {
   try {
