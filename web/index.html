@@ -1435,7 +1435,18 @@
                     btn.innerText = 'Saved!';
                     btn.style.borderColor = 'var(--file-xls)';
                     btn.style.color = 'var(--file-xls)';
-                    setTimeout(() => progressContainer.style.display = 'none', 1000);
+                    
+                    // 关闭附件栏
+                    setTimeout(() => {
+                        document.getElementById('attachment-bar').classList.remove('active');
+                        progressContainer.style.display = 'none';
+                        progressBar.style.width = '0%';
+                        pendingFileRaw = null;
+                        pendingFileName = '';
+                        btn.innerText = 'Push to Server';
+                        btn.style.borderColor = 'var(--cyan)';
+                        btn.style.color = 'var(--cyan)';
+                    }, 1000);
                 } else {
                     btn.innerText = 'Error';
                     btn.style.borderColor = 'var(--file-pdf)';

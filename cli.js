@@ -106,9 +106,12 @@ app.post('/api/upload_binary', (req, res) => {
 
   writeStream.on('finish', () => {
     console.log(`${STYLES.green}[Storage] File saved (Stream): ${filePath}${STYLES.reset}`);
+
+    // 在上下文中增加一条完成记录
+    conversationHistory.push({ role: 'user', content: `[系统通知] 刚刚完成：push ${fileName} 到 uploads 文件夹` });
+
     res.json({ success: true, path: filePath });
   });
-
   writeStream.on('error', (err) => {
     console.error(`${STYLES.red}[Storage] Stream Save Error: ${err.message}${STYLES.reset}`);
     res.status(500).json({ error: err.message });
