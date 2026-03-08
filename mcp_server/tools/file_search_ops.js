@@ -6,7 +6,7 @@ const STYLES = { reset: '\x1b[0m', cyan: '\x1b[36m', green: '\x1b[32m', yellow: 
 const definitions = [
   {
     name: "search_files",
-    description: "Search for files in a directory matching a pattern (wildcards supported). Returns a list of matching file paths. Provides real-time progress to the server console.",
+    description: "Search for files in a directory matching a pattern (wildcards supported). Returns a list of matching file paths. Provides real-time progress to the server console. NOTE: The pattern '*.*' is forbidden; please use more specific filters.",
     inputSchema: {
       type: "object",
       properties: {
@@ -17,13 +17,18 @@ const definitions = [
         },
         pattern: {
           type: "string",
-          description: "The filename pattern to search for. Supports wildcards like * and ? (e.g., '*.log', 'config.json', 'test_??.py').",
+          description: "The filename pattern to search for. Supports wildcards like * and ? (e.g., '*.log', 'config.json'). Forbidden: '*.*'.",
           default: "*"
         },
         recursive: {
           type: "boolean",
           description: "Whether to search in subdirectories.",
           default: true
+        },
+        system_search: {
+          type: "boolean",
+          description: "If true, includes system/program/hidden directories (e.g., Windows, Program Files, node_modules). Defaults to false to ensure speed and focus.",
+          default: false
         }
       },
       required: ["pattern"]
@@ -37,11 +42,27 @@ function wildcardToRegex(pattern) {
   return new RegExp(`^${regex}$`, 'i');
 }
 
+// 定义需要跳过的系统目录
+const SKIP_DIRS = ['Windows'];
+
 async function handle(name, args, requestHost) {
   if (name === "search_files") {
     const rootPath = path.resolve(args.root_path || ".");
     const pattern = args.pattern;
     const recursive = args.recursive !== false;
+    const systemSearch = args.system_search === true;
+
+    // 拒绝 *.* 模式
+    if (pattern === "*.*") {
+      return { 
+        isError: true, 
+        content: [{ 
+          type: "text", 
+          text: "Error: The pattern '*.*' is forbidden to prevent system overload. Please use a more specific pattern (e.g., '*.txt') or use '*' to match files without extensions." 
+        }] 
+      };
+    }
+
     const regex = wildcardToRegex(pattern);
 
     if (!fs.existsSync(rootPath)) {
@@ -53,7 +74,7 @@ async function handle(name, args, requestHost) {
     let matchCount = 0;
     const startTime = Date.now();
 
-    console.log(`${STYLES.cyan}[SEARCH] Starting search for '${pattern}' in '${rootPath}' (recursive: ${recursive})${STYLES.reset}`);
+    console.log(`${STYLES.cyan}[SEARCH] Starting search for '${pattern}' in '${rootPath}' (recursive: ${recursive}, system_search: ${systemSearch})${STYLES.reset}`);
 
     function scan(dir) {
       try {
@@ -62,6 +83,11 @@ async function handle(name, args, requestHost) {
           const fullPath = path.join(dir, entry.name);
           
           if (entry.isDirectory()) {
+            // 如果不是系统搜索，则仅跳过 Windows 目录
+            if (!systemSearch && entry.name.toLowerCase() === 'windows') {
+              continue;
+            }
+
             if (recursive) {
               scan(fullPath);
             }
@@ -70,7 +96,6 @@ async function handle(name, args, requestHost) {
             if (regex.test(entry.name)) {
               results.push(fullPath);
               matchCount++;
-              // Every 10 matches or 1000 scanned, log a brief update
               if (matchCount % 50 === 0) {
                 console.log(`${STYLES.yellow}[SEARCH PROGRESS] Matches: ${matchCount}, Scanned: ${scannedCount}${STYLES.reset}`);
               }
@@ -78,7 +103,7 @@ async function handle(name, args, requestHost) {
           }
         }
       } catch (err) {
-        console.error(`${STYLES.red}[SEARCH ERROR] Error scanning ${dir}: ${err.message}${STYLES.reset}`);
+        // 静默处理无权限访问的目录
       }
     }
 

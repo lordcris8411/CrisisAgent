@@ -17,7 +17,7 @@ const modules = fs.readdirSync(toolsDir)
   .map(f => require(path.join(toolsDir, f)));
 
 const TOOL_DEFINITIONS = modules.flatMap(m => m.definitions);
-const activatedTools = new Set();
+const activatedTools = new Map(); // tool_name -> execution_id
 
 app.get("/list", (req, res) => 
 {
@@ -57,7 +57,7 @@ app.get("/download", (req, res) => {
 
 app.post("/call", async (req, res) => 
 {
-  const { name, arguments: args, tool_name, clientHost } = req.body;
+  const { name, arguments: args, tool_name, clientHost, execution_id } = req.body;
   const requestHost = clientHost || req.headers.host || "localhost:3000";
 
   try 
@@ -68,8 +68,9 @@ app.post("/call", async (req, res) =>
       const target = TOOL_DEFINITIONS.find(t => t.name === targetName);
       if (!target) return res.status(404).json({ isError: true, content: [{ type: 'text', text: `Tool ${targetName} not found` }] });
       
-      // 激活工具（解锁）
-      activatedTools.add(targetName);
+      // 激活工具，绑定当前 Execution ID
+      activatedTools.set(targetName, execution_id);
+      console.log(`${STYLES.green}[DISCOVERY] Tool '${targetName}' unlocked for Execution ID: ${execution_id}${STYLES.reset}`);
       
       return res.json({ 
         content: [{ 
@@ -80,10 +81,14 @@ app.post("/call", async (req, res) =>
     }
 
     // 安全检查：强制执行“先研究再执行”协议
-    if (!activatedTools.has(name) && name !== 'get_env_info') {
-      const msg = `[PROTOCOL VIOLATION] Tool '${name}' is currently LOCKED. As an expert, you MUST first call 'get_tool_usage' with tool_name='${name}' to retrieve the official schema and safety constraints before you can execute it. Discovery is mandatory.`;
-      console.log(`${STYLES.red}${msg}${STYLES.reset}`);
-      return res.json({ isError: true, content: [{ type: 'text', text: msg }] });
+    // 环境信息工具 get_env_info 始终允许
+    if (name !== 'get_env_info') {
+      const allowedId = activatedTools.get(name);
+      if (allowedId === undefined || allowedId !== execution_id) {
+        const msg = `[PROTOCOL VIOLATION] Tool '${name}' is LOCKED for ID ${execution_id}. As an expert, you MUST first call 'get_tool_usage' with tool_name='${name}' to retrieve the official schema and safety constraints for THIS execution session. Discovery is mandatory.`;
+        console.log(`${STYLES.red}${msg}${STYLES.reset}`);
+        return res.json({ isError: true, content: [{ type: 'text', text: msg }] });
+      }
     }
 
     // 寻找能处理该工具的模块
@@ -94,10 +99,9 @@ app.post("/call", async (req, res) =>
         try
         {
           const result = await mod.handle(name, args, requestHost);
-          console.log(`${STYLES.green}[SUCCESS] ${name} executed for host: ${requestHost}${STYLES.reset}`);
+          console.log(`${STYLES.green}[SUCCESS] ${name} executed for ID: ${execution_id}${STYLES.reset}`);
           
-          // 执行后自动重新锁定 (强制每次都要 Discovery)
-          activatedTools.delete(name);
+          // 执行后不再自动重新锁定，允许在同一个 ID 内重复使用
           
           return res.json(result);
         } catch (e) {

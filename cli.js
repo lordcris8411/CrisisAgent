@@ -268,10 +268,13 @@ async function setup() {
     const resList = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/list`);
     const dataList = await resList.json();
     executorSkills = dataList.tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
+    
+    // 关键：在这里拉取详细的能力汇总
     const resCap = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/capabilities`);
     const dataCap = await resCap.json();
     capabilitiesSummary = dataCap.summary;
-    console.log(`${STYLES.green}Crisis Agent Connected. Type /help for commands.${STYLES.reset}`);
+    
+    console.log(`${STYLES.green}Crisis Agent Connected (with ${executorSkills.length} tools). Type /help for commands.${STYLES.reset}`);
   } catch (e) { console.error("Executor connection failed:", e.message); }
 }
 
@@ -340,7 +343,26 @@ async function chat(input, images = [], files = [], imageNames = []) {
       while (true) {
         try {
           const { done, value } = await reader.read();
-          if (done) break;
+          
+          // 如果流结束，尝试处理 buffer 中剩余的内容
+          if (done) {
+            if (buffer.trim()) {
+              try {
+                const data = JSON.parse(buffer);
+                const msg = data.message;
+                if (msg?.thinking) {
+                  broadcast({ type: 'thinking_chunk', content: msg.thinking });
+                }
+                if (msg?.content) {
+                  fullContent += msg.content;
+                  broadcast({ type: 'stream_chunk', content: msg.content });
+                }
+                if (msg?.tool_calls) toolCalls = toolCalls.concat(msg.tool_calls);
+              } catch (e) {}
+            }
+            break;
+          }
+
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
           buffer = lines.pop();

@@ -29,6 +29,7 @@ let skills = [];
 let resourceTools = [];
 let currentExpertAbortController = null;
 let cachedEnvInfo = "System environment info not yet loaded.";
+let executionCounter = 0;
 
 // 获取初始环境信息的内部函数
 async function fetchInitialEnvInfo() {
@@ -36,7 +37,7 @@ async function fetchInitialEnvInfo() {
     const res = await fetch(`${CONFIG.RESOURCE_MCP_URL}/call`, { 
       method: 'POST', 
       headers: { 'Content-Type': 'application/json' }, 
-      body: JSON.stringify({ name: 'get_env_info', arguments: {} }) 
+      body: JSON.stringify({ name: 'get_env_info', arguments: {}, execution_id: -1 }) 
     });
     const data = await res.json();
     if (data.content && data.content[0]) {
@@ -160,7 +161,8 @@ const localTools = [
     inputSchema: { 
       type: "object", 
       properties: { 
-        tool_name: { type: "string", description: "The name of the tool to research." } 
+        tool_name: { type: "string", description: "The name of the tool to research." },
+        execution_id: { type: "integer", description: "Internal context ID." }
       }, 
       required: ["tool_name"] 
     },
@@ -176,7 +178,11 @@ const localTools = [
         const toolRes = await fetch(`${CONFIG.RESOURCE_MCP_URL}/call`, { 
           method: 'POST', 
           headers: { 'Content-Type': 'application/json' }, 
-          body: JSON.stringify({ name: 'get_tool_usage', arguments: { tool_name: args.tool_name } }) 
+          body: JSON.stringify({ 
+            name: 'get_tool_usage', 
+            arguments: { tool_name: args.tool_name },
+            execution_id: args.execution_id 
+          }) 
         });
         const toolData = await toolRes.json();
         return toolData;
@@ -215,14 +221,14 @@ async function syncResourceTools()
   } catch (e) { console.error(`Resource MCP Error: ${e.message}`); }
 }
 
-async function runStatelessLLM(skill, userInstruction, images = [], files = [], clientHost)
+async function runStatelessLLM(skill, userInstruction, images = [], files = [], clientHost, executionId)
 {
   const currentConfig = JSON.parse(fs.readFileSync('config.json', 'utf8'));
   const allAvailableTools = [...resourceTools, ...localTools];
   
   // 关键调试日志：验证接收到的 Host
   const finalHost = clientHost || "localhost:3000";
-  console.log(`${STYLES.dim}[Executor] Using Client Host for URLs: ${finalHost}${STYLES.reset}`);
+  console.log(`${STYLES.dim}[Executor] Using Client Host for URLs: ${finalHost} (Execution ID: ${executionId})${STYLES.reset}`);
   
   // 筛选该技能授权的工具，并强制加入 MCP 原生的 get_tool_usage 供专家自查
   const authorizedNames = [...skill.use, "get_tool_usage"];
@@ -306,7 +312,25 @@ async function runStatelessLLM(skill, userInstruction, images = [], files = [], 
       {
         try {
           const { done, value } = await reader.read();
-          if (done) break;
+          
+          if (done) {
+            if (buffer.trim()) {
+              try {
+                const data = JSON.parse(buffer);
+                const message = data.message;
+                if (message?.thinking) {
+                  if (currentConfig.EXECUTOR_THINK) relayLog(message.thinking, 'thinking_chunk');
+                }
+                if (message?.content) {
+                  relayLog(message.content, 'console_log_stream');
+                  fullContent += message.content;
+                }
+                if (data.message?.tool_calls) toolCalls = toolCalls.concat(data.message.tool_calls);
+              } catch (e) {}
+            }
+            break;
+          }
+
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
           buffer = lines.pop();
@@ -351,6 +375,11 @@ async function runStatelessLLM(skill, userInstruction, images = [], files = [], 
       {
         for (const call of toolCalls)
         {
+          // 强制在工具参数中注入 execution_id (如果是 get_tool_usage)
+          if (call.function.name === 'get_tool_usage') {
+            call.function.arguments.execution_id = executionId;
+          }
+
           const argsString = JSON.stringify(call.function.arguments);
           const toolLog = `[Executor] Tool Call: ${call.function.name} (${argsString})`;
           console.log(`${STYLES.dim}${toolLog}${STYLES.reset}`);
@@ -361,7 +390,7 @@ async function runStatelessLLM(skill, userInstruction, images = [], files = [], 
           if (localTool) toolData = await localTool.handler(call.function.arguments, images, files);
           else {
             // 调试日志：确认即将透传到 MCP 的 Host 值
-            console.log(`${STYLES.cyan}[Executor -> MCP] Calling '${call.function.name}' with clientHost: ${finalHost}${STYLES.reset}`);
+            console.log(`${STYLES.cyan}[Executor -> MCP] Calling '${call.function.name}' (Execution ID: ${executionId})${STYLES.reset}`);
             
             const toolRes = await fetch(`${CONFIG.RESOURCE_MCP_URL}/call`, { 
               method: 'POST', 
@@ -369,6 +398,7 @@ async function runStatelessLLM(skill, userInstruction, images = [], files = [], 
               body: JSON.stringify({ 
                 name: call.function.name, 
                 arguments: call.function.arguments,
+                execution_id: executionId,
                 clientHost: finalHost // 确保透传 finalHost
               }) 
             });
@@ -407,6 +437,9 @@ async function runStatelessLLM(skill, userInstruction, images = [], files = [], 
 
 app.post("/call", async (req, res) => 
 {
+  executionCounter++;
+  const currentId = executionCounter;
+
   const { name, arguments: args, skill_name, images, files, clientHost } = req.body;
   
   if (files && files.length > 0) {
@@ -417,14 +450,14 @@ app.post("/call", async (req, res) =>
     const targetSkill = skills.find(s => s.name === skill_name);
     if (!targetSkill) return res.status(404).json({ error: `Skill '${skill_name}' not found.` });
     const instruction = args?.task || `Perform ${skill_name}`;
-    const expertRes = await runStatelessLLM(targetSkill, instruction, images, files, clientHost);
+    const expertRes = await runStatelessLLM(targetSkill, instruction, images, files, clientHost, currentId);
     return res.json({ content: [{ type: "text", text: expertRes.content }], tokens: { prompt: expertRes.tokens.prompt, completion: expertRes.tokens.completion }, images: expertRes.images || [] });
   }
 
   if (name !== "delegate_task") return res.status(404).json({ error: "Only delegate_task allowed" });
 
   const instruction = args.task;
-  const delegateLog = `[DELEGATE] Task: ${instruction}`;
+  const delegateLog = `[DELEGATE] Task: ${instruction} (Execution ID: ${currentId})`;
   console.log(`${STYLES.bold}${delegateLog}${STYLES.reset}`);
   relayLog(delegateLog);
   
@@ -465,7 +498,7 @@ app.post("/call", async (req, res) =>
     }
 
     const bestSkill = enabledSkills.find(s => s.name === decision);
-    const expertRes = await runStatelessLLM(bestSkill, instruction, images, files, clientHost);
+    const expertRes = await runStatelessLLM(bestSkill, instruction, images, files, clientHost, currentId);
     res.json({ content: [{ type: "text", text: expertRes.content }], tokens: { prompt: expertRes.tokens.prompt, completion: expertRes.tokens.completion }, images: expertRes.images || [] });
   }
   catch (e) {
@@ -476,7 +509,19 @@ app.post("/call", async (req, res) =>
 });
 
 app.get("/list", (req, res) => {
-  res.json({ tools: [{ name: "delegate_task", description: "Delegate task", inputSchema: { type: "object", properties: { task: { type: "string" } }, required: ["task"] } }] });
+  res.json({ 
+    tools: [{ 
+      name: "delegate_task", 
+      description: "Mandatory tool for all system-level operations. Use this to search files, read/write data, manage processes, analyze screens, or check system status. If the user asks 'where is...', 'find...', 'how much memory...', or mentions any file/system action, you MUST use this tool.", 
+      inputSchema: { 
+        type: "object", 
+        properties: { 
+          task: { type: "string", description: "The specific instruction for the executor expert." } 
+        }, 
+        required: ["task"] 
+      } 
+    }] 
+  });
 });
 app.get("/skills", (req, res) => res.json({ skills }));
 app.get("/mcp_tools", (req, res) => res.json({ remote: resourceTools, local: localTools }));
@@ -489,7 +534,13 @@ app.post("/set_skill_status", (req, res) => {
   loadSkills();
   res.json({ message: "OK" });
 });
-app.get("/capabilities", (req, res) => { res.json({ summary: "Domains: File, Screen, Info, Control." }); });
+app.get("/capabilities", (req, res) => { 
+  const summary = skills
+    .filter(s => s.enabled !== false)
+    .map(s => `[${s.name}]: ${s.description}`)
+    .join('\n');
+  res.json({ summary: `Available Specialized Skills:\n${summary}\n\nGeneral Domains: File System, Desktop Vision, Hardware Monitoring, Process Control.` }); 
+});
 app.get("/system_prompt", (req, res) => {
   try {
     const template = fs.readFileSync('exe_system.md', 'utf8');
