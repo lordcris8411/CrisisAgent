@@ -1,6 +1,6 @@
 {
   "name": "downloader",
-  "description": "Retrieve web content or download files from the internet directly to the system.",
+  "description": "PRIMARY expert for all internet-based tasks. Use this for downloading files, fetching web page content, or retrieving any resource via URL (http/https).",
   "use": [
     "download_file",
     "web_fetch",

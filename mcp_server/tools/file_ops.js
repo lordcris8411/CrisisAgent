@@ -11,23 +11,34 @@ const definitions =
   { name: "move_file", description: "Move a file or folder to a new location on the system.", inputSchema: { type: "object", properties: { source: { type: "string" }, destination: { type: "string" } }, required: ["source", "destination"] } },
   { name: "rename_file", description: "Change the name of a file or folder in its current directory.", inputSchema: { type: "object", properties: { path: { type: "string" }, new_name: { type: "string", description: "The new filename only, not the full path." } }, required: ["path", "new_name"] } },
   { name: "list_directory", description: "List all files and subdirectories within a specified path on the system. Defaults to the current working directory if no path is provided.", inputSchema: { type: "object", properties: { path: { type: "string", default: ".", description: "The directory to list." } } } },
-  { name: "list_scripts", description: "Specialized tool to list all available JavaScript automation scripts in the 'mcp_server/scripts/' directory along with their metadata.", inputSchema: { type: "object", properties: {} } },
   { name: "get_file_info", description: "Retrieve detailed metadata for a file or directory on the system, including size (in bytes), creation time, last modification time, and a downloadable HTTP URL.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
   { name: "get_file_hash", description: "Calculate the SHA-256 hash of a file. Essential for verifying file integrity or detecting changes.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
-  { name: "web_fetch", description: "Perform an HTTP GET request to fetch content from a URL. Useful for analysis, web scraping, or API debugging.", inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } }
+  { name: "web_fetch", description: "Perform an HTTP GET request to fetch content from a URL for analysis. Supports redirects.", inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } },
+  { name: "download_file", description: "Download a file from a URL directly to a specified local path. Supports redirects.", inputSchema: { type: "object", properties: { url: { type: "string" }, path: { type: "string" } }, required: ["url", "path"] } }
 ];
+
+// 辅助函数：支持重定向的 HTTP 请求
+async function requestWithRedirects(url, options = {}, maxRedirects = 5) {
+  const http = url.startsWith('https') ? require('https') : require('http');
+  return new Promise((resolve, reject) => {
+    const req = http.get(url, options, (res) => {
+      // 处理重定向
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        if (maxRedirects <= 0) return reject(new Error("Too many redirects"));
+        const nextUrl = new URL(res.headers.location, url).toString();
+        return resolve(requestWithRedirects(nextUrl, options, maxRedirects - 1));
+      }
+      resolve(res);
+    });
+    req.on('error', reject);
+  });
+}
 
 async function handle(name, args, requestHost = "localhost:3000")
 {
-  // Path normalization for Windows drive letters: "D:" -> "D:\"
-  if (process.platform === 'win32')
-  {
-    for (const key in args)
-    {
-      if (typeof args[key] === 'string' && /^[a-zA-Z]:$/.test(args[key]))
-      {
-        args[key] += "\\";
-      }
+  if (process.platform === 'win32') {
+    for (const key in args) {
+      if (typeof args[key] === 'string' && /^[a-zA-Z]:$/.test(args[key])) args[key] += "\\";
     }
   }
 
@@ -36,9 +47,8 @@ async function handle(name, args, requestHost = "localhost:3000")
     case "get_file_hash":
     {
       if (!fs.existsSync(args.path)) return { isError: true, content: [{ type: "text", text: "File not found" }] };
-      const fileBuffer = fs.readFileSync(args.path);
       const hashSum = crypto.createHash('sha256');
-      hashSum.update(fileBuffer);
+      hashSum.update(fs.readFileSync(args.path));
       return { content: [{ type: "text", text: hashSum.digest('hex') }] };
     }
 
@@ -65,83 +75,58 @@ async function handle(name, args, requestHost = "localhost:3000")
 
     case "rename_file":
       const targetDir = path.dirname(path.resolve(args.path));
-      const targetPath = path.join(targetDir, args.new_name);
-      fs.renameSync(args.path, targetPath);
+      fs.renameSync(args.path, path.join(targetDir, args.new_name));
       return { content: [{ type: "text", text: `Renamed ${args.path} to ${args.new_name}` }] };
 
     case "list_directory":
       return { content: [{ type: "text", text: fs.readdirSync(args.path || ".").join('\n') }] };
 
-    case "list_scripts":
-    {
-      const scriptsDir = path.join(__dirname, '../scripts');
-      if (!fs.existsSync(scriptsDir)) fs.mkdirSync(scriptsDir, { recursive: true });
-      const files = fs.readdirSync(scriptsDir).filter(f => f.endsWith('.js'));
-      
-      const scriptInfos = files.map(f => {
-        const fullPath = path.join(scriptsDir, f);
-        const content = fs.readFileSync(fullPath, 'utf8');
-        const lines = content.split('\n');
-        // 尝试从前几行寻找 // Description:
-        let description = "(No description found)";
-        for (let i = 0; i < Math.min(5, lines.length); i++) {
-          if (lines[i].includes('Description:')) {
-            description = lines[i].split('Description:')[1].trim();
-            break;
-          }
-        }
-        return `${f}: ${description}`;
-      });
-
-      return { content: [{ type: "text", text: scriptInfos.join('\n') || "(No scripts found)" }] };
-    }
-
     case "get_file_info":
     {
-      const absolutePath = path.isAbsolute(args.path) ? args.path : path.resolve(args.path);
+      const absolutePath = path.resolve(args.path);
       if (!fs.existsSync(absolutePath)) return { isError: true, content: [{ type: "text", text: `File not found: ${args.path}` }] };
-      
-      // 调试：打印接收到的 Host
-      console.log(`[DEBUG: get_file_info] Received requestHost: ${requestHost}`);
-
       const stats = fs.statSync(absolutePath);
       const isDir = stats.isDirectory();
-      
-      let infoLines = [
-        `File: ${path.basename(absolutePath)}`,
-        `Size: ${(stats.size / 1024).toFixed(2)} KB`,
-        `Created: ${stats.birthtime.toLocaleString()}`,
-        `Modified: ${stats.mtime.toLocaleString()}`,
-        `Is Directory: ${isDir}`
-      ];
-
-      if (!isDir) {
-        const downloadUrl = `http://${requestHost}/download?path=${encodeURIComponent(absolutePath)}`;
-        infoLines.push(`Public Download URL: ${downloadUrl}`);
-      }
-
+      let infoLines = [`File: ${path.basename(absolutePath)}`, `Size: ${(stats.size / 1024).toFixed(2)} KB`, `Created: ${stats.birthtime.toLocaleString()}`, `Modified: ${stats.mtime.toLocaleString()}`, `Is Directory: ${isDir}`];
+      if (!isDir) infoLines.push(`Public Download URL: http://${requestHost}/download?path=${encodeURIComponent(absolutePath)}`);
       return { content: [{ type: "text", text: infoLines.join('\n') }] };
     }
 
     case "web_fetch":
     {
-      return new Promise((resolve) => {
-        const http = args.url.startsWith('https') ? require('https') : require('http');
-        http.get(args.url, (res) => {
-          if (res.statusCode !== 200) {
-            resolve({ isError: true, content: [{ type: "text", text: `Fetch failed: Status ${res.statusCode}` }] });
-            return;
-          }
+      try {
+        const res = await requestWithRedirects(args.url);
+        if (res.statusCode !== 200) throw new Error(`Status ${res.statusCode}`);
+        return new Promise((resolve) => {
           let data = "";
           res.on('data', (chunk) => { data += chunk; });
           res.on('end', () => {
             const preview = data.length > 50000 ? data.substring(0, 50000) + "... [TRUNCATED]" : data;
             resolve({ content: [{ type: "text", text: preview }] });
           });
-        }).on('error', (err) => {
-          resolve({ isError: true, content: [{ type: "text", text: `Fetch error: ${err.message}` }] });
         });
-      });
+      } catch (e) { return { isError: true, content: [{ type: "text", text: `Fetch error: ${e.message}` }] }; }
+    }
+
+    case "download_file":
+    {
+      try {
+        const res = await requestWithRedirects(args.url);
+        if (res.statusCode !== 200) throw new Error(`Status ${res.statusCode}`);
+        fs.mkdirSync(path.dirname(path.resolve(args.path)), { recursive: true });
+        const fileStream = fs.createWriteStream(args.path);
+        return new Promise((resolve, reject) => {
+          res.pipe(fileStream);
+          fileStream.on('finish', () => {
+            fileStream.close();
+            resolve({ content: [{ type: "text", text: `Successfully downloaded ${args.url} to ${args.path}` }] });
+          });
+          fileStream.on('error', (err) => {
+            fs.unlink(args.path, () => {});
+            reject(err);
+          });
+        });
+      } catch (e) { return { isError: true, content: [{ type: "text", text: `Download error: ${e.message}` }] }; }
     }
   }
 }
