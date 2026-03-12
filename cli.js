@@ -130,6 +130,8 @@ async function chat(input, images = [], files = []) {
   if (files && files.length > 0) userMsg.files = files;
   if (input || images?.length || files?.length) history.push(userMsg);
 
+  let lastFullResponse = null;
+
   while (true) {
     currentAbortController = new AbortController();
     const systemPrompt = getSystemPrompt();
@@ -195,11 +197,14 @@ async function chat(input, images = [], files = []) {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ arguments: { task: taskObj }, clientHost: EXTERNAL_HOST }),
             signal: currentAbortController.signal
-          }, 300000); // 5 min timeout for executor
+          }, 300000);
 
           const skillData = await res.json();
+          lastFullResponse = skillData; // 暂存最后的执行层完整响应
+          
           if (skillData.data?.tokens) { totalPromptTokens += (skillData.data.tokens.prompt || 0); totalResponseTokens += (skillData.data.tokens.completion || 0); broadcastConfig(); }
           if (skillData.data?.images) skillData.data.images.forEach(img => broadcast({ type: 'stream_image', data: img }));
+          
           const resText = skillData.result ? skillData.message : `[ERROR] ${skillData.message}`;
           console.log(`\n${STYLES.dim}[Tool Result]: ${resText.substring(0, 200)}...${STYLES.reset}`);
           history.push({ role: 'tool', content: resText, tool_call_id: call.id });
@@ -214,7 +219,7 @@ async function chat(input, images = [], files = []) {
       break; 
     } finally { currentAbortController = null; }
   }
-  broadcast({ type: 'stream_end' });
+  broadcast({ type: 'stream_end', full_response: lastFullResponse });
 }
 
 async function processInput(line, source = 'terminal', images = [], files = []) {
