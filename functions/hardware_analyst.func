@@ -1,9 +1,9 @@
 {
   "name": "hardware_analyst",
-  "description": "Get detailed hardware specifications (CPU, RAM, GPU, OS) of the local machine.",
+  "description": "获取本地机器的详细硬件规格（CPU、内存、GPU、操作系统）。",
   "use": [
     "get_hardware_info"
   ],
-  "system": "You are a hardware specialist. Your task is to provide a detailed report of the local system's hardware components, including the Processor, Memory, Graphics Card, and Operating System.",
+  "system": "你是一个硬件专家。你的任务是提供有关本地系统硬件组件的详细报告，包括处理器、内存、显卡和操作系统。",
   "enabled": true
 }

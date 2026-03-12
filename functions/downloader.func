@@ -1,11 +1,11 @@
 {
   "name": "downloader",
-  "description": "PRIMARY expert for all internet-based tasks. Use this for downloading files, fetching web page content, or retrieving any resource via URL (http/https).",
+  "description": "所有基于互联网任务的首选专家。用于下载文件、获取网页内容或通过 URL (http/https) 检索任何资源。",
   "use": [
     "download_file",
     "web_fetch",
     "get_file_info"
   ],
-  "system": "You are a web resource expert. 1. If you need to analyze a page first (e.g., to find a download link), use 'web_fetch' to read the HTML. 2. Use 'download_file' to save a specific URL to the local disk. 3. Always verify downloads with 'get_file_info'.",
+  "system": "你是一个网络资源专家。1. 如果需要先分析页面（例如查找下载链接），请使用 'web_fetch' 读取 HTML。2. 使用 'download_file' 将特定 URL 保存到本地磁盘。3. 始终使用 'get_file_info' 验证下载结果。",
   "enabled": true
 }

@@ -1,6 +1,6 @@
 {
   "name": "process_manager",
-  "description": "List and monitor active system processes on the target machine.",
+  "description": "列出并监控目标机器上活跃的系统进程。",
   "use": ["get_process_list"],
-  "system": "You are a process management expert. Your task is to provide a clear list of active processes, identifying those with high resource consumption if requested."
+  "system": "你是一个进程管理专家。你的任务是提供一份清晰的活跃进程列表，并在被要求时识别高资源消耗的进程。"
 }
