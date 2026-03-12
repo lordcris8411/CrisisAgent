@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 // --- Configuration ---
-const TARGET_HOST = 'http://172.16.1.99:3003'; // 修改为目标机器的 IP
+const TARGET_HOST = 'http://172.16.1.100:3003'; // 修改为目标机器的 IP
 const AUTH_TOKEN = 'CRISIS_AGENT_SECURE_TOKEN_2026';
 // ---------------------
 

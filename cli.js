@@ -25,15 +25,44 @@ const STYLES = {
 // 获取局域网 IP
 function getLocalIP() {
   const interfaces = os.networkInterfaces();
+  const candidates = [];
+
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name]) {
       // 排除 IPv6 和回环地址
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
+      if ((iface.family === 'IPv4' || iface.family === 4) && !iface.internal) {
+        // 排除 APIPA 地址 (169.254.x.x)
+        if (iface.address.startsWith('169.254.')) continue;
+
+        const isVirtual = /vEthernet|VirtualBox|VMware|WSL|ZeroTier|Tailscale|TAP|VPN|Pseudo|Clash|FlClash/i.test(name);
+        const isPhysical = /Ethernet|Wi-Fi|WLAN|浠ュお缃|以太网|无线网络连接/i.test(name);
+        
+        candidates.push({
+          address: iface.address,
+          name: name,
+          isVirtual: isVirtual,
+          isPhysical: isPhysical
+        });
       }
     }
   }
-  return '127.0.0.1';
+
+  if (candidates.length === 0) return '127.0.0.1';
+
+  // 排序规则：
+  // 1. 物理网卡 (Ethernet/Wi-Fi) 且非虚拟 优先
+  // 2. 非虚拟 优先
+  // 3. 其他
+  candidates.sort((a, b) => {
+    // 物理网卡权重
+    const scoreA = (a.isPhysical ? 2 : 0) + (a.isVirtual ? 0 : 1);
+    const scoreB = (b.isPhysical ? 2 : 0) + (b.isVirtual ? 0 : 1);
+    
+    if (scoreA !== scoreB) return scoreB - scoreA;
+    return 0;
+  });
+
+  return candidates[0].address;
 }
 const EXTERNAL_HOST = `${getLocalIP()}:3000`;
 console.log(`${STYLES.cyan}[Network] External access IP identified as: ${EXTERNAL_HOST}${STYLES.reset}`);

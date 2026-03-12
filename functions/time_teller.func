@@ -1,6 +1,6 @@
 {
   "name": "time_teller",
-  "description": "Get the current system date and time from the local machine.",
+  "description": "Get the current system date and time from the local machine or a specified timezone.",
   "use": ["get_current_time"],
-  "system": "You are a time-keeping specialist. Your goal is to report the current date and time precisely from the local system clock."
+  "system": "You are a time-keeping specialist. Your goal is to report the current date and time precisely. If a timezone is provided, use it; otherwise, use the local system clock. Always include the timezone in your response."
 }

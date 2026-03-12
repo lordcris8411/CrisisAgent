@@ -10,7 +10,7 @@ const definitions =
 [
   { name: "get_screen_resolution", description: "Get the dynamic screen resolution (width and height) of the primary monitor.", inputSchema: { type: "object", properties: {} } },
   { name: "capture_screen", description: "Capture the system desktop screen at its current native resolution. Returns a JPEG image.", inputSchema: { type: "object", properties: {} } },
-  { name: "get_current_time", description: "Get system clock time in 'YYYY-MM-DD HH:mm:ss' format.", inputSchema: { type: "object", properties: {} } },
+  { name: "get_current_time", description: "Get system clock time in 'YYYY-MM-DD HH:mm:ss' format. Supports optional timezone.", inputSchema: { type: "object", properties: { timezone: { type: "string", description: "Optional IANA timezone string (e.g., 'America/New_York', 'Asia/Shanghai'). Defaults to system local time." } } } },
   { name: "get_system_stats", description: "Get CPU usage, memory usage, and free disk space on this machine.", inputSchema: { type: "object", properties: {} } },
   { name: "get_hardware_info", description: "Get detailed hardware specifications (CPU, RAM, GPU, OS) of this machine.", inputSchema: { type: "object", properties: {} } },
   { name: "get_env_info", description: "Get current system environment information including username and environment variables.", inputSchema: { type: "object", properties: {} } },
@@ -97,9 +97,28 @@ async function handle(name, args)
     }
 
     case "get_current_time":
-      const now = new Date();
-      const pad = (n) => String(n).padStart(2, '0');
-      return { content: [{ type: "text", text: `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}` }] };
+    {
+      try
+      {
+        const { timezone } = args || {};
+        const options = {
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit',
+          hour12: false,
+          timeZone: timezone || undefined
+        };
+        const formatter = new Intl.DateTimeFormat('en-GB', options);
+        const parts = formatter.formatToParts(new Date());
+        const getPart = (type) => parts.find(p => p.type === type).value;
+        const formattedTime = `${getPart('year')}-${getPart('month')}-${getPart('day')} ${getPart('hour')}:${getPart('minute')}:${getPart('second')}`;
+        const tzName = timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        return { content: [{ type: "text", text: `${formattedTime} (Timezone: ${tzName})` }] };
+      }
+      catch (e)
+      {
+        return { isError: true, content: [{ type: "text", text: `Error: ${e.message}` }] };
+      }
+    }
 
     case "get_system_stats":
     {
