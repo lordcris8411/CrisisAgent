@@ -63,16 +63,16 @@ app.get('/download', async (req, res) => {
     if (contentDisposition) res.setHeader('Content-Disposition', contentDisposition);
     const buffer = await response.arrayBuffer();
     res.send(Buffer.from(buffer));
-  } catch (e) { res.status(500).send(`Download Proxy Error: ${e.message}`); }
+  } catch (e) { res.status(500).send(`Download Error: ${e.message}`); }
 });
 
 app.get('/api/skills', async (req, res) => {
-  try { const r = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`, {}, 5000); res.json(await r.json()); } catch (e) { res.status(500).json({ error: e.message }); }
+  try { const r = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`); res.json(await r.json()); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/set_skill', async (req, res) => {
   try {
-    await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/set_skill_status`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(req.body) }, 5000);
-    const rCap = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/capabilities`, {}, 5000);
+    await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/set_skill_status`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(req.body) });
+    const rCap = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/capabilities`);
     capabilitiesSummary = (await rCap.json()).summary;
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -91,7 +91,7 @@ wss.on('connection', (ws) => {
         fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/interrupt`, { method: 'POST' }).catch(() => {});
         broadcast({ type: 'stream_end' });
       }
-    } catch (e) { console.error("WS Message Error:", e.message); }
+    } catch (e) {}
   });
   ws.send(JSON.stringify({ type: 'history', history }));
   broadcastConfig();
@@ -108,7 +108,7 @@ function broadcastConfig() {
 
 function getSystemPrompt() {
   let p = fs.existsSync('system.md') ? fs.readFileSync('system.md', 'utf8') : "";
-  if (capabilitiesSummary) p += `\n\n### System Capabilities:\n${capabilitiesSummary}`;
+  if (capabilitiesSummary) p += `\n\n### Capabilities:\n${capabilitiesSummary}`;
   return p;
 }
 
@@ -120,8 +120,8 @@ async function setup() {
     executorSkills = dataList.tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
     const resCap = await fetchWithTimeout(`${executorUrl}/capabilities`, {}, 10000);
     capabilitiesSummary = (await resCap.json()).summary;
-    console.log(`${STYLES.green}Crisis Agent Connected (${executorSkills.length} tools).${STYLES.reset}`);
-  } catch (e) { console.error(`${STYLES.red}Connection failed: ${e.message}${STYLES.reset}`); }
+    console.log(`${STYLES.green}Crisis Agent Connected.${STYLES.reset}`);
+  } catch (e) { console.error(`${STYLES.red}Setup failed: ${e.message}${STYLES.reset}`); }
 }
 
 async function chat(input, images = [], files = []) {
@@ -131,7 +131,6 @@ async function chat(input, images = [], files = []) {
   if (input || images?.length || files?.length) history.push(userMsg);
 
   let lastFullResponse = null;
-
   while (true) {
     currentAbortController = new AbortController();
     const systemPrompt = getSystemPrompt();
@@ -144,7 +143,6 @@ async function chat(input, images = [], files = []) {
     });
 
     try {
-      console.log(`${STYLES.cyan}[CLI] Requesting LLM response...${STYLES.reset}`);
       const response = await fetchWithTimeout(`${CONFIG.CLI_LLM.HOST}/api/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: CONFIG.CLI_LLM.MODEL, messages: [{ role: 'system', content: systemPrompt }, ...formattedHistory], tools: executorSkills, think: CONFIG.CLI_THINK, stream: true }),
@@ -186,25 +184,18 @@ async function chat(input, images = [], files = []) {
         for (const call of toolCalls) {
           let rawTask = call.function.arguments.task;
           const taskObj = { 
-            result: true, 
-            message: (typeof rawTask === 'object') ? (rawTask.message || rawTask.instruction) : rawTask,
-            attachment: files, 
-            data: { images: images.map(img => typeof img === 'string' ? img : img.data) } 
+            result: true, message: (typeof rawTask === 'object') ? (rawTask.message || rawTask.instruction) : rawTask,
+            attachment: files, data: { images: images.map(img => typeof img === 'string' ? img : img.data) } 
           };
-
-          console.log(`${STYLES.cyan}[CLI -> Executor] Calling Executor...${STYLES.reset}`);
           const res = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/call`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ arguments: { task: taskObj }, clientHost: EXTERNAL_HOST }),
             signal: currentAbortController.signal
           }, 300000);
-
           const skillData = await res.json();
-          lastFullResponse = skillData; // 暂存最后的执行层完整响应
-          
-          if (skillData.data?.tokens) { totalPromptTokens += (skillData.data.tokens.prompt || 0); totalResponseTokens += (skillData.data.tokens.completion || 0); broadcastConfig(); }
+          lastFullResponse = skillData;
+          if (skillData.data?.tokens) { totalPromptTokens += skillData.data.tokens.prompt; totalResponseTokens += skillData.data.tokens.completion; broadcastConfig(); }
           if (skillData.data?.images) skillData.data.images.forEach(img => broadcast({ type: 'stream_image', data: img }));
-          
           const resText = skillData.result ? skillData.message : `[ERROR] ${skillData.message}`;
           console.log(`\n${STYLES.dim}[Tool Result]: ${resText.substring(0, 200)}...${STYLES.reset}`);
           history.push({ role: 'tool', content: resText, tool_call_id: call.id });
@@ -212,28 +203,63 @@ async function chat(input, images = [], files = []) {
         continue;
       }
       break;
-    } catch (e) { 
-      const errMsg = `[CLI ERROR] ${e.message}`;
-      console.error(STYLES.red + errMsg + STYLES.reset);
-      broadcast({ type: 'console_log', content: errMsg });
-      break; 
-    } finally { currentAbortController = null; }
+    } catch (e) { break; } finally { currentAbortController = null; }
   }
   broadcast({ type: 'stream_end', full_response: lastFullResponse });
 }
 
 async function processInput(line, source = 'terminal', images = [], files = []) {
-  const input = line.trim();
-  if (!input && !images?.length && !files?.length) return;
-  if (source === 'terminal') broadcast({ role: 'user', content: input });
+  const input = line.trim(); if (!input && !images?.length && !files?.length) return;
+  const log = (msg) => { console.log(msg); if (source === 'web') broadcast({ type: 'console_log', content: msg }); };
+
   if (input === '/exit') process.exit(0);
   else if (input === '/clear') { console.clear(); broadcast({ type: 'clear' }); }
-  else if (input === '/reset') { history = []; totalPromptTokens = 0; totalResponseTokens = 0; broadcast({ type: 'history', history: [] }); broadcastConfig(); }
+  else if (input === '/reset') { history = []; totalPromptTokens = 0; totalResponseTokens = 0; broadcast({ type: 'history', history: [] }); broadcastConfig(); log("Session Reset."); }
   else if (input === '/reboot') { setTimeout(() => process.exit(99), 500); }
-  else await chat(input, images, files);
+  else if (input === '/context') { log(`History length: ${history.length}\nPrompt Tokens: ${totalPromptTokens}\nResponse Tokens: ${totalResponseTokens}`); }
+  else if (input === '/system') { log(getSystemPrompt()); }
+  else if (input === '/exe_system') {
+    try { const r = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/system_prompt`); const d = await r.json(); log(`Template:\n${d.template}\n\nEnv:\n${d.env_context}`); }
+    catch(e) { log("Error: " + e.message); }
+  }
+  else if (input === '/skill_debug') {
+    try {
+      const rList = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`); const dList = await rList.json();
+      const rMcp = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/mcp_tools`); const dMcp = await rMcp.json();
+      const mcpNames = [...dMcp.remote, ...dMcp.local].map(t => t.name);
+      dList.skills.forEach(s => {
+        const missing = s.use.filter(u => !mcpNames.includes(u));
+        log(`Skill [${s.name}]: ${missing.length > 0 ? "MISSING " + missing.join(', ') : "OK"}`);
+      });
+    } catch(e) { log("Debug failed: " + e.message); }
+  }
+  else if (input.startsWith('/list')) {
+    try {
+      if (input.includes('skills')) {
+        const r = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`); const d = await r.json();
+        log(d.skills.map(s => `${s.name} [${s.enabled!==false?'ON':'OFF'}] - ${s.description}`).join('\n'));
+      } else {
+        const r = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/mcp_tools`); const d = await r.json();
+        log(`Remote:\n` + d.remote.map(t=>`- ${t.name}`).join('\n') + `\nLocal:\n` + d.local.map(t=>`- ${t.name}`).join('\n'));
+      }
+    } catch(e) { log("List failed."); }
+  }
+  else if (input.startsWith('/set')) {
+    const parts = input.split(' ');
+    if (parts[1] === 'skill') {
+      const name = parts[2], status = parts[3] === 'on';
+      await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/set_skill_status`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name, enabled: status }) });
+      log(`Skill ${name} set to ${parts[3]}`);
+    } else if (parts[1] === 'cli_think' || parts[1] === 'exec_think') {
+      const key = parts[1].toUpperCase(), status = parts[2] === 'on';
+      CONFIG[key] = status; broadcastConfig(); log(`${parts[1]} is ${parts[2]}`);
+    }
+  }
+  else if (input === '/help') {
+    log("\n/clear, /reset, /reboot, /exit, /context, /system, /exe_system, /skill_debug, /list skills, /list mcp functions, /set skill <name> <on/off>, /set <cli_think|exec_think> <on/off>\n");
+  }
+  else { if (source === 'terminal') broadcast({ role: 'user', content: input }); await chat(input, images, files); }
 }
-
-process.on('unhandledRejection', (r) => console.error("Unhandled CLI Rejection:", r));
 
 setup().then(() => {
   const port = CONFIG.CLI_PORT || 3002;
