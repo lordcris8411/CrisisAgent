@@ -110,9 +110,9 @@ async function syncResourceTools() {
 function getEnabledSkills() { return skills.filter(s => s.enabled !== false); }
 
 async function runPlanner(instructionJSON, enabledSkills, files, images) {
-  const skillSpecs = enabledSkills.map(s => `- Expert Name: "${s.name}"\n  Description: ${s.description}\n  Tools: [${s.use.join(', ')}]`).join('\n');
-  const plannerPrompt = `You are the MISSION PLANNER.\nTask: ${JSON.stringify(instructionJSON)}\nAVAILABLE EXPERTS:\n${skillSpecs}\nYou MUST return a JSON object: {"expert": "...", "goal": "...", "plan": ["Step 1", "Step 2"]}`;
-  relayLog(`\n[STAGE 1] Requesting Plan...`);
+  const skillSpecs = enabledSkills.map(s => `- Expert: "${s.name}"\n  Desc: ${s.description}\n  Tools: [${s.use.join(', ')}]`).join('\n');
+  const plannerPrompt = `Mission Planner.\nTask: ${JSON.stringify(instructionJSON)}\nExperts:\n${skillSpecs}\nReturn JSON: {"expert": "...", "goal": "...", "plan": ["..."]}`;
+  relayLog(`\n[STAGE 1] Planning mission...`);
   const formattedImages = images ? images.map(img => typeof img === 'string' ? img : img.data) : [];
   try {
     const response = await fetchWithTimeout(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
@@ -121,8 +121,7 @@ async function runPlanner(instructionJSON, enabledSkills, files, images) {
     }, 60000);
     const data = await response.json();
     const planJSON = safeParseJSON(data.message.content);
-    if (!planJSON) throw new Error("Planner response is not valid JSON.");
-    if (!planJSON.plan) planJSON.plan = [planJSON.goal || "Execute mission"];
+    if (!planJSON) throw new Error("Planner Error.");
     relayLog({ "[Planner Result]": planJSON });
     return planJSON;
   } catch (e) { relayLog(`[STAGE 1 ERROR] ${e.message}`); throw e; }
@@ -130,9 +129,10 @@ async function runPlanner(instructionJSON, enabledSkills, files, images) {
 
 async function runExpertStep(skill, messages, authorizedTools, executionId, finalHost, sessionImages, sessionFiles) {
   const currentConfig = JSON.parse(fs.readFileSync('config.json', 'utf8'));
-  let promptTokens = 0, completionTokens = 0, capturedImages = [], stepFinalContent = "";
+  let promptTokens = 0, completionTokens = 0, capturedImages = [], stepFinalContent = "", resources = [];
   while (true) {
     currentExpertAbortController = new AbortController();
+    relayLog(`[Expert] Requesting LLM...`);
     const response = await fetchWithTimeout(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
       method: 'POST', body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages, tools: authorizedTools, think: false, stream: true }),
       signal: currentExpertAbortController.signal
@@ -172,17 +172,22 @@ async function runExpertStep(skill, messages, authorizedTools, executionId, fina
           }
           const text = toolData.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
           const imgs = toolData.content.filter(c => c.type === 'image').map(c => c.data);
+          
+          // 核心逻辑：提取 resource 类型的附件信息
+          const toolResources = toolData.content.filter(c => c.type === 'resource').map(c => c.metadata);
+          if (toolResources.length > 0) resources = resources.concat(toolResources);
+
           if (imgs.length > 0) capturedImages = capturedImages.concat(imgs);
           messages.push({ role: 'tool', content: text, tool_call_id: call.id });
           if (imgs.length > 0) messages.push({ role: 'user', content: "Attached visuals.", images: imgs });
-          relayLog({ "[Tool Response]": { name: call.function.name, result: text.length > 500 ? text.substring(0, 500) + '...' : text } });
-        } catch (te) { relayLog({ "[Tool ERROR]": { name: call.function.name, message: te.message } }); messages.push({ role: 'tool', content: `Error: ${te.message}`, tool_call_id: call.id }); }
+          relayLog({ "[Tool Response]": { name: call.function.name, result: text.substring(0, 200) + '...', resources: toolResources } });
+        } catch (te) { relayLog({ "[Tool ERROR]": te.message }); messages.push({ role: 'tool', content: `Error: ${te.message}`, tool_call_id: call.id }); }
       }
       continue;
     }
     stepFinalContent = fullContent; break;
   }
-  return { messages, content: stepFinalContent, promptTokens, completionTokens, capturedImages };
+  return { messages, content: stepFinalContent, promptTokens, completionTokens, capturedImages, resources };
 }
 
 async function runExecuteLoop(planJSON, skill, instructionJSON, images, files, clientHost, currentId) {
@@ -193,9 +198,8 @@ async function runExecuteLoop(planJSON, skill, instructionJSON, images, files, c
   });
   let expertSystemPrompt = fs.readFileSync('exe_system.md', 'utf8').replace('{{skill_system}}', skill.system);
   expertSystemPrompt += `\n\n### CONTEXT\n${cachedEnvInfo}\nGoal: ${planJSON.goal}`;
-  let messages = [{ role: 'system', content: expertSystemPrompt }, { role: 'user', content: `Start execution. Plan: ${JSON.stringify(planJSON.plan)}` }];
-  if (images && images.length > 0) messages[1].images = images.map(img => typeof img === 'string' ? img : img.data);
-  let results = [], totalP = 0, totalC = 0, allImgs = [];
+  let messages = [{ role: 'system', content: expertSystemPrompt }, { role: 'user', content: `Start mission loop.` }];
+  let results = [], totalP = 0, totalC = 0, allImgs = [], allResources = [];
   relayLog(`\n[STAGE 2] Execute_Loop Starting...`);
   for (let i = 0; i < planJSON.plan.length; i++) {
     relayLog(`\n[STEP ${i+1}/${planJSON.plan.length}] ${planJSON.plan[i]}`);
@@ -204,14 +208,15 @@ async function runExecuteLoop(planJSON, skill, instructionJSON, images, files, c
       const stepRes = await runExpertStep(skill, messages, authorizedTools, currentId, finalHost, images, files);
       messages = stepRes.messages; totalP += stepRes.promptTokens; totalC += stepRes.completionTokens;
       allImgs = allImgs.concat(stepRes.capturedImages);
+      allResources = allResources.concat(stepRes.resources || []);
       results.push({ step: planJSON.plan[i], output: stepRes.content });
-    } catch (se) { relayLog(`[STAGE 2 ERROR] Step ${i+1} failed: ${se.message}`); throw se; }
+    } catch (se) { throw se; }
   }
-  return { results, tokens: { prompt: totalP, completion: totalC }, images: allImgs };
+  return { results, tokens: { prompt: totalP, completion: totalC }, images: allImgs, resources: allResources };
 }
 
 async function runReporter(instructionJSON, loopData) {
-  const reporterPrompt = `Summarize mission.\nTask: ${JSON.stringify(instructionJSON)}\nHistory: ${JSON.stringify(loopData.results)}\nYou MUST return a JSON object: {"report": "Markdown text"}`;
+  const reporterPrompt = `Summarize mission.\nTask: ${JSON.stringify(instructionJSON)}\nHistory: ${JSON.stringify(loopData.results)}\nResources: ${JSON.stringify(loopData.resources)}\nYou MUST return a JSON: {"report": "Markdown总结", "attachment": [{ "name": "...", "url": "..." }]}`;
   relayLog(`\n[STAGE 3] Generating Report...`);
   try {
     const response = await fetchWithTimeout(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
@@ -220,10 +225,10 @@ async function runReporter(instructionJSON, loopData) {
     }, 60000);
     const data = await response.json();
     const parsed = safeParseJSON(data.message.content);
-    const finalReport = { result: !!parsed, message: parsed ? parsed.report : data.message.content, attachment: [], data: {} };
+    const finalReport = { result: !!parsed, message: parsed ? parsed.report : data.message.content, attachment: (parsed && parsed.attachment) ? parsed.attachment : loopData.resources, data: {} };
     relayLog({ "[Reporter Result]": finalReport });
     return finalReport;
-  } catch (e) { relayLog({ "[STAGE 3 ERROR]": e.message }); return { result: false, message: "Summary Error", attachment: [], data: {} }; }
+  } catch (e) { return { result: false, message: "Summary Error", attachment: [], data: {} }; }
 }
 
 app.post("/call", async (req, res) => {
@@ -233,7 +238,7 @@ app.post("/call", async (req, res) => {
   const instruction = request.message || "No instruction";
   const files = request.attachment || [];
   const images = request.data?.images || [];
-  relayLog(`\n${STYLES.bold}>>> MISSION START [ID: ${currentId}]: ${instruction}${STYLES.reset}`);
+  relayLog(`\n${STYLES.bold}>>> MISSION START [ID: ${currentId}]${STYLES.reset}`);
   const enabledSkills = getEnabledSkills();
   try {
     const planJSON = await runPlanner({ instruction }, enabledSkills, files, images);
@@ -242,7 +247,7 @@ app.post("/call", async (req, res) => {
     const loopData = await runExecuteLoop(planJSON, bestSkill, { instruction }, images, files, clientHost, currentId);
     const finalReport = await runReporter({ instruction }, loopData);
     relayLog(`\n${STYLES.bold}<<< MISSION COMPLETE [ID: ${currentId}]${STYLES.reset}\n`);
-    res.json({ result: finalReport.result, message: finalReport.message, attachment: files, data: { images: loopData.images || [], tokens: loopData.tokens, planner: planJSON } });
+    res.json({ result: finalReport.result, message: finalReport.message, attachment: finalReport.attachment, data: { images: loopData.images || [], tokens: loopData.tokens, planner: planJSON } });
   } catch (e) { relayLog(`[CRITICAL ERROR] ${e.message}`); res.status(500).json({ result: false, message: `Mission Failed: ${e.message}`, attachment: [], data: {} }); }
 });
 
