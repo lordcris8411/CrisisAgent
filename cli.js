@@ -12,7 +12,10 @@ const STYLES = { reset: '\x1b[0m', cyan: '\x1b[36m', bold: '\x1b[1m', green: '\x
 
 async function fetchWithTimeout(url, options = {}, timeout = 60000) {
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
+  const id = setTimeout(() => {
+    console.error(`[CLI TIMEOUT] ${url} exceeded ${timeout}ms`);
+    controller.abort();
+  }, timeout);
   try {
     const response = await fetch(url, { ...options, signal: controller.signal });
     clearTimeout(id); return response;
@@ -91,7 +94,7 @@ wss.on('connection', (ws) => {
         fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/interrupt`, { method: 'POST' }).catch(() => {});
         broadcast({ type: 'stream_end' });
       }
-    } catch (e) {}
+    } catch (e) { console.error("WS ERROR:", e); }
   });
   ws.send(JSON.stringify({ type: 'history', history }));
   broadcastConfig();
@@ -108,7 +111,7 @@ function broadcastConfig() {
 
 function getSystemPrompt() {
   let p = fs.existsSync('system.md') ? fs.readFileSync('system.md', 'utf8') : "";
-  if (capabilitiesSummary) p += `\n\n### Capabilities:\n${capabilitiesSummary}`;
+  if (capabilitiesSummary) p += `\n\n### System Capabilities:\n${capabilitiesSummary}`;
   return p;
 }
 
@@ -143,6 +146,7 @@ async function chat(input, images = [], files = []) {
     });
 
     try {
+      console.log(`${STYLES.cyan}[CLI] LLM Request...${STYLES.reset}`);
       const response = await fetchWithTimeout(`${CONFIG.CLI_LLM.HOST}/api/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: CONFIG.CLI_LLM.MODEL, messages: [{ role: 'system', content: systemPrompt }, ...formattedHistory], tools: executorSkills, think: CONFIG.CLI_THINK, stream: true }),
@@ -162,11 +166,11 @@ async function chat(input, images = [], files = []) {
           try {
             const data = JSON.parse(line);
             if (data.message?.thinking) {
-              if (!isThinking) { process.stdout.write(`\n${STYLES.dim}[思考中]\n `); isThinking = true; }
+              if (!isThinking) { process.stdout.write(`\n${STYLES.dim}[Thinking]\n `); isThinking = true; }
               process.stdout.write(data.message.thinking); broadcast({ type: 'thinking_chunk', content: data.message.thinking });
             }
             if (data.message?.content) {
-              if (isThinking) { process.stdout.write(`${STYLES.reset}\n\n[结果]\n`); isThinking = false; }
+              if (isThinking) { process.stdout.write(`${STYLES.reset}\n\n[Answer]\n`); isThinking = false; }
               process.stdout.write(data.message.content); broadcast({ type: 'stream_chunk', content: data.message.content });
               fullContent += data.message.content;
             }
@@ -176,8 +180,7 @@ async function chat(input, images = [], files = []) {
         }
       }
 
-      // 核心拦截：如果即将调用工具，则强制清空 LLM 的文本输出，防止废话。
-      if (toolCalls.length > 0) fullContent = "";
+      if (toolCalls.length > 0) fullContent = ""; // 强制静言废话
 
       const assistantMsg = { role: 'assistant', content: fullContent };
       if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls;
@@ -191,26 +194,33 @@ async function chat(input, images = [], files = []) {
             attachment: files, data: { images: images.map(img => typeof img === 'string' ? img : img.data) } 
           };
 
-          // 记录 CLI 发给 Executor 的请求到 Web UI
-          broadcast({ type: 'console_log', content: `[CLI -> Executor] Request: ${JSON.stringify(taskObj, null, 2)}` });
+          // 核心加固：打印向执行层发起的请求
+          broadcast({ type: 'console_log', content: { "[CLI -> Executor REQUEST]": taskObj } });
 
           const res = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/call`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ arguments: { task: taskObj }, clientHost: EXTERNAL_HOST }),
             signal: currentAbortController.signal
           }, 300000);
+          
           const skillData = await res.json();
           lastFullResponse = skillData;
+          
           if (skillData.data?.tokens) { totalPromptTokens += skillData.data.tokens.prompt; totalResponseTokens += skillData.data.tokens.completion; broadcastConfig(); }
           if (skillData.data?.images) skillData.data.images.forEach(img => broadcast({ type: 'stream_image', data: img }));
+          
           const resText = skillData.result ? skillData.message : `[ERROR] ${skillData.message}`;
-          console.log(`\n${STYLES.dim}[Tool Result]: ${resText.substring(0, 200)}...${STYLES.reset}`);
+          console.log(`\n${STYLES.dim}[Tool Result Received]${STYLES.reset}`);
           history.push({ role: 'tool', content: resText, tool_call_id: call.id });
         }
         continue;
       }
       break;
-    } catch (e) { break; } finally { currentAbortController = null; }
+    } catch (e) {
+      console.error(e);
+      broadcast({ type: 'console_log', content: { "[CLI FATAL ERROR]": e.message, stack: e.stack } });
+      break; 
+    } finally { currentAbortController = null; }
   }
   broadcast({ type: 'stream_end', full_response: lastFullResponse });
 }
@@ -265,6 +275,11 @@ async function processInput(line, source = 'terminal', images = [], files = []) 
   }
   else { if (source === 'terminal') broadcast({ role: 'user', content: input }); await chat(input, images, files); }
 }
+
+process.on('unhandledRejection', (r) => {
+  console.error("CLI UNHANDLED REJECTION:", r);
+  broadcast({ type: 'console_log', content: { "[CLI FATAL REJECTION]": r.message, stack: r.stack } });
+});
 
 setup().then(() => {
   const port = CONFIG.CLI_PORT || 3002;
