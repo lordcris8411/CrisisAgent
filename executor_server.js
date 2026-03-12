@@ -11,7 +11,7 @@ app.use(express.json({ limit: '100mb' }));
 
 const STYLES = { reset: '\x1b[0m', green: '\x1b[32m', cyan: '\x1b[36m', bold: '\x1b[1m', dim: '\x1b[2m', red: '\x1b[31m', yellow: '\x1b[33m' };
 
-// 将日志同步发送给 CLI 的 Web 服务 (超短超时，绝不阻塞)
+// 将日志同步发送给 CLI 的 Web 服务
 function relayLog(content, type = 'console_log') {
   const cleanText = content.replace(/\x1b\[[0-9;]*m/g, '');
   const controller = new AbortController();
@@ -31,7 +31,6 @@ let currentExpertAbortController = null;
 let cachedEnvInfo = "System environment info not yet loaded.";
 let executionCounter = 0;
 
-// 获取初始环境信息的内部函数
 async function fetchInitialEnvInfo() {
   try {
     const res = await fetch(`${CONFIG.RESOURCE_MCP_URL}/call`, { 
@@ -49,7 +48,6 @@ async function fetchInitialEnvInfo() {
   }
 }
 
-// Executor 本地工具
 const localTools = [
   {
     name: "read_local_file",
@@ -84,7 +82,6 @@ const localTools = [
     },
     handler: async (args, sessionImages) => {
       try {
-        // 智能容错：如果未提供索引且只有一张图，默认使用 0
         let idx = args.image_index;
         if (idx === undefined && sessionImages && sessionImages.length === 1) idx = 0;
         
@@ -129,7 +126,6 @@ const localTools = [
     },
     handler: async (args, sessionImages, sessionFiles) => {
       try {
-        // 智能容错
         let idx = args.file_index;
         if (idx === undefined && sessionFiles && sessionFiles.length === 1) idx = 0;
 
@@ -167,13 +163,11 @@ const localTools = [
       required: ["tool_name"] 
     },
     handler: async (args) => {
-      // 优先检查是否是本地工具
       const localTarget = localTools.find(t => t.name === args.tool_name);
       if (localTarget) {
         return { content: [{ type: "text", text: `Tool: ${localTarget.name}\nDescription: ${localTarget.description}\nSchema: ${JSON.stringify(localTarget.inputSchema, null, 2)}` }] };
       }
 
-      // 如果不是本地工具，则尝试从远程 MCP 获取并同步解锁状态
       try {
         const toolRes = await fetch(`${CONFIG.RESOURCE_MCP_URL}/call`, { 
           method: 'POST', 
@@ -184,8 +178,7 @@ const localTools = [
             execution_id: args.execution_id 
           }) 
         });
-        const toolData = await toolRes.json();
-        return toolData;
+        return await toolRes.json();
       } catch (e) {
         return { isError: true, content: [{ type: "text", text: `Remote Discovery Error: ${e.message}` }] };
       }
@@ -193,8 +186,7 @@ const localTools = [
   }
 ];
 
-function loadSkills()
-{
+function loadSkills() {
   const dir = path.join(__dirname, 'functions');
   if (!fs.existsSync(dir)) return;
   const files = fs.readdirSync(dir).filter(f => f.endsWith('.func'));
@@ -209,8 +201,7 @@ function loadSkills()
   relayLog(msg);
 }
 
-async function syncResourceTools()
-{
+async function syncResourceTools() {
   try {
     const res = await fetch(`${CONFIG.RESOURCE_MCP_URL}/list`);
     const data = await res.json();
@@ -221,27 +212,194 @@ async function syncResourceTools()
   } catch (e) { console.error(`Resource MCP Error: ${e.message}`); }
 }
 
-async function runStatelessLLM(skill, userInstruction, images = [], files = [], clientHost, executionId)
-{
+function getEnabledSkills() { return skills.filter(s => s.enabled !== false); }
+
+// ============================================================================
+// STAGE 1: PLANNER
+// ============================================================================
+async function runPlanner(instruction, enabledSkills, files, images) {
+  let contextHint = "";
+  if (files && files.length > 0) contextHint += `\n[Context: ${files.length} file(s) attached to session]`;
+  if (images && images.length > 0) contextHint += `\n[Context: ${images.length} image(s) attached to session]`;
+
+  const skillSpecs = enabledSkills.map(s => `- ${s.name}: ${s.description}`).join('\n');
+  const plannerPrompt = `Task: "${instruction}"${contextHint}\n\n作为 Planner (规划者)，你必须强制执行【链式思维】。请根据任务目标，从以下列表中选择最合适的专家技能 (Expert)，并将任务拆解为具体的执行步骤 (Plan)。\n\n可用技能:\n${skillSpecs}\n\n你必须且只能返回一个合法的 JSON 对象，不要包含任何 markdown 代码块标记，结构如下：\n{\n  "expert": "<skill_name 或者是 NONE>",\n  "goal": "<总体目标的简短描述>",\n  "plan": [\n    "<第一步要执行的操作>",\n    "<第二步要执行的操作>"\n  ]\n}`;
+
+  const formattedImages = images ? images.map(img => typeof img === 'string' ? img : img.data) : [];
+
+  const response = await fetch(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 
+      model: CONFIG.EXECUTOR_LLM.MODEL, 
+      messages: [{ role: 'user', content: plannerPrompt, images: formattedImages }], 
+      think: false, 
+      stream: false, 
+      options: { temperature: 0.2 }
+    })
+  });
+  
+  const data = await response.json();
+  const rawText = data.message.content.trim();
+  
+  try {
+     let cleanText = rawText.replace(/```json/i, '').replace(/```/g, '').trim();
+     const start = cleanText.indexOf('{');
+     const end = cleanText.lastIndexOf('}');
+     if (start !== -1 && end !== -1) {
+         cleanText = cleanText.substring(start, end + 1);
+     }
+     return JSON.parse(cleanText);
+  } catch (e) {
+     console.error("Planner parsing failed:", rawText);
+     throw new Error(`Planner returned invalid JSON.`);
+  }
+}
+
+// ============================================================================
+// STAGE 2: EXECUTE LOOP (and runExpertStep)
+// ============================================================================
+async function runExpertStep(skill, messages, authorizedTools, executionId, finalHost, sessionImages, sessionFiles) {
   const currentConfig = JSON.parse(fs.readFileSync('config.json', 'utf8'));
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let capturedImages = [];
+  let stepFinalContent = "";
+
+  while (true) {
+    currentExpertAbortController = new AbortController();
+    const response = await fetch(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
+      method: 'POST',
+      body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages, tools: authorizedTools, think: false, stream: true }),
+      signal: currentExpertAbortController.signal
+    });
+    
+    if (!response.ok) throw new Error(`LLM API returned ${response.status}`);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullContent = "";
+    let toolCalls = [];
+    let buffer = '';
+
+    while (true) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          if (buffer.trim()) {
+            try {
+              const data = JSON.parse(buffer);
+              const message = data.message;
+              if (message?.thinking && currentConfig.EXECUTOR_THINK) relayLog(message.thinking, 'thinking_chunk');
+              if (message?.content) { relayLog(message.content, 'console_log_stream'); fullContent += message.content; }
+              if (data.message?.tool_calls) toolCalls = toolCalls.concat(data.message.tool_calls);
+            } catch (e) {}
+          }
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            const message = data.message;
+
+            if (message?.thinking) {
+              if (currentConfig.EXECUTOR_THINK) relayLog(message.thinking, 'thinking_chunk');
+              continue;
+            }
+
+            if (message?.content) {
+              relayLog(message.content, 'console_log_stream');
+              fullContent += message.content;
+            }
+
+            if (data.message?.tool_calls) toolCalls = toolCalls.concat(data.message.tool_calls);
+
+            if (data.done) {
+              if (data.prompt_eval_count) promptTokens += data.prompt_eval_count;
+              if (data.eval_count) completionTokens += data.eval_count;
+            }
+          } catch (e) {}
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') throw e; 
+        break;
+      }
+    }
+
+    const assistantMsg = { role: 'assistant', content: fullContent };
+    if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls;
+    messages.push(assistantMsg);
+
+    if (toolCalls.length > 0) {
+      for (const call of toolCalls) {
+        if (call.function.name === 'get_tool_usage') call.function.arguments.execution_id = executionId;
+
+        const argsString = JSON.stringify(call.function.arguments);
+        const toolLog = `[Execute_Loop -> Expert] Tool Call: ${call.function.name} (${argsString})`;
+        console.log(`${STYLES.dim}${toolLog}${STYLES.reset}`);
+        relayLog(toolLog);
+
+        let toolData;
+        const localTool = localTools.find(t => t.name === call.function.name);
+        if (localTool) toolData = await localTool.handler(call.function.arguments, sessionImages, sessionFiles);
+        else {
+          console.log(`${STYLES.cyan}[Executor -> MCP] Calling '${call.function.name}' (Execution ID: ${executionId})${STYLES.reset}`);
+          const toolRes = await fetch(`${CONFIG.RESOURCE_MCP_URL}/call`, { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ 
+              name: call.function.name, 
+              arguments: call.function.arguments,
+              execution_id: executionId,
+              clientHost: finalHost
+            }) 
+          });
+          toolData = await toolRes.json();
+        }
+
+        const text = toolData.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+        const capturedImagesFromTool = toolData.content.filter(c => c.type === 'image').map(c => c.data);
+
+        const resultPreview = text.length > 500 ? text.substring(0, 500) + "..." : text;
+        const resultLog = `[Tool Result] ${call.function.name}: ${resultPreview}${capturedImagesFromTool.length > 0 ? ` (+${capturedImagesFromTool.length} images)` : ''}`;
+        console.log(`${STYLES.dim}${resultLog}${STYLES.reset}`);
+        relayLog(resultLog);
+
+        if (capturedImagesFromTool && capturedImagesFromTool.length > 0) capturedImages = capturedImages.concat(capturedImagesFromTool);
+        
+        messages.push({ role: 'tool', content: text, tool_call_id: call.id });
+        
+        if (capturedImagesFromTool && capturedImagesFromTool.length > 0) {
+          messages.push({ role: 'user', content: "Attached captured visuals.", images: capturedImagesFromTool });
+        }
+      }
+      continue;
+    }
+
+    stepFinalContent = fullContent;
+    break;
+  }
+
+  return { messages, content: stepFinalContent, promptTokens, completionTokens, capturedImages };
+}
+
+async function runExecuteLoop(planJSON, skill, instruction, images, files, clientHost, currentId) {
   const allAvailableTools = [...resourceTools, ...localTools];
-  
-  // 关键调试日志：验证接收到的 Host
   const finalHost = clientHost || "localhost:3000";
-  console.log(`${STYLES.dim}[Executor] Using Client Host for URLs: ${finalHost} (Execution ID: ${executionId})${STYLES.reset}`);
   
-  // 筛选该技能授权的工具，并强制加入 MCP 原生的 get_tool_usage 供专家自查
   const authorizedNames = [...skill.use, "get_tool_usage"];
   const authorizedToolsRaw = allAvailableTools.filter(t => authorizedNames.includes(t.name));
   
-  // 核心：强制执行“先研究再执行”协议
-  // 无论工具是来自远程 MCP 还是本地 Executor，初始 Schema 全部隐藏
   const authorizedTools = authorizedToolsRaw.map(t => {
     if (t.name === "get_tool_usage") {
-      // 只有查询工具保留完整 Schema
       return { type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } };
     } else {
-      // 所有业务工具（包括 localTools）参数全部隐藏
       return { 
         type: 'function', 
         function: { 
@@ -253,264 +411,154 @@ async function runStatelessLLM(skill, userInstruction, images = [], files = [], 
     }
   });
 
-  // 从 exe_system.md 动态加载并替换变量
   let expertSystemPrompt = "";
   try {
     const template = fs.readFileSync('exe_system.md', 'utf8');
     expertSystemPrompt = template.replace('{{skill_system}}', skill.system);
-    // 注入当前系统环境上下文
     expertSystemPrompt += `\n\n### CURRENT SYSTEM ENVIRONMENT CONTEXT\n${cachedEnvInfo}`;
+    expertSystemPrompt += `\n\n### OVERALL GOAL\n${planJSON.goal}`;
+    expertSystemPrompt += `\n\n[EXECUTION PROTOCOL] You are running within an Execute_Loop. You will receive one step at a time from the overall plan. Focus ONLY on completing the current step using available tools, then return a text summary of what you did.`;
   } catch (e) {
     expertSystemPrompt = `${skill.system}\n\n### CURRENT SYSTEM ENVIRONMENT CONTEXT\n${cachedEnvInfo}`;
   }
 
-  // 注入附件上下文提示，防止 AI 盲目调用保存工具
   if (images && images.length > 0) {
     const imageList = images.map((img, i) => `Index ${i}: ${img.name || 'unnamed'}`).join(', ');
-    expertSystemPrompt += `\n\n[ATTACHMENT ALERT: VISION READY] ${images.length} image(s) have been loaded into your visual context: ${imageList}. You can SEE and ANALYZE them directly. Do NOT use 'save_uploaded_image' unless the user explicitly asks to store them on disk. When saving, use their original filenames if possible.`;
-  }  if (files && files.length > 0) {
+    expertSystemPrompt += `\n\n[ATTACHMENT ALERT: VISION READY] ${images.length} image(s) have been loaded into your visual context: ${imageList}.`;
+  }  
+  if (files && files.length > 0) {
     const fileList = files.map(f => f.name).join(', ');
-    expertSystemPrompt += `\n\n[ATTACHMENT ALERT: SESSION FILES] The following files are available for this session: ${fileList}. You can refer to them by name.`;
-  }
-
-  let userMsg = { role: 'user', content: userInstruction };
-  if (images && images.length > 0) {
-    // 关键修复：发送给 Ollama 的 images 必须是纯 Base64 字符串数组
-    userMsg.images = images.map(img => typeof img === 'string' ? img : img.data);
+    expertSystemPrompt += `\n\n[ATTACHMENT ALERT: SESSION FILES] The following files are available for this session: ${fileList}.`;
   }
 
   let messages = [
     { role: 'system', content: expertSystemPrompt },
-    userMsg
+    { role: 'user', content: `总体任务: ${instruction}\n现在我们将开始按计划逐条执行。` }
   ];
 
-  let promptTokens = 0;
-  let completionTokens = 0;
-  let capturedImages = [];
-
-  try {
-    while (true)
-    {
-      currentExpertAbortController = new AbortController();
-      const response = await fetch(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, 
-      {
-        method: 'POST',
-        body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages, tools: authorizedTools, think: false, stream: true }),
-        signal: currentExpertAbortController.signal
-      });
-      
-      if (!response.ok) throw new Error(`LLM API returned ${response.status}`);
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let fullContent = "";
-      let toolCalls = [];
-      let buffer = '';
-
-      relayLog('[Executor]');
-      while (true)
-      {
-        try {
-          const { done, value } = await reader.read();
-          
-          if (done) {
-            if (buffer.trim()) {
-              try {
-                const data = JSON.parse(buffer);
-                const message = data.message;
-                if (message?.thinking) {
-                  if (currentConfig.EXECUTOR_THINK) relayLog(message.thinking, 'thinking_chunk');
-                }
-                if (message?.content) {
-                  relayLog(message.content, 'console_log_stream');
-                  fullContent += message.content;
-                }
-                if (data.message?.tool_calls) toolCalls = toolCalls.concat(data.message.tool_calls);
-              } catch (e) {}
-            }
-            break;
-          }
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop();
-
-          for (const line of lines)
-          {
-            if (!line.trim()) continue;
-            try {
-              const data = JSON.parse(line);
-              const message = data.message;
-
-              if (message?.thinking) {
-                if (currentConfig.EXECUTOR_THINK) relayLog(message.thinking, 'thinking_chunk');
-                continue;
-              }
-
-              if (message?.content) {
-                let content = message.content;
-                relayLog(content, 'console_log_stream');
-                fullContent += content;
-              }
-
-              if (data.message?.tool_calls) toolCalls = toolCalls.concat(data.message.tool_calls);
-
-              if (data.done) {
-                if (data.prompt_eval_count) promptTokens += data.prompt_eval_count;
-                if (data.eval_count) completionTokens += data.eval_count;
-              }
-            } catch (e) {}
-          }
-        } catch (e) {
-          if (e.name === 'AbortError') throw e; 
-          break;
-        }
-      }
-
-      const assistantMsg = { role: 'assistant', content: fullContent };
-      if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls;
-      messages.push(assistantMsg);
-
-      if (toolCalls.length > 0)
-      {
-        for (const call of toolCalls)
-        {
-          // 强制在工具参数中注入 execution_id (如果是 get_tool_usage)
-          if (call.function.name === 'get_tool_usage') {
-            call.function.arguments.execution_id = executionId;
-          }
-
-          const argsString = JSON.stringify(call.function.arguments);
-          const toolLog = `[Executor] Tool Call: ${call.function.name} (${argsString})`;
-          console.log(`${STYLES.dim}${toolLog}${STYLES.reset}`);
-          relayLog(toolLog);
-
-          let toolData;
-          const localTool = localTools.find(t => t.name === call.function.name);
-          if (localTool) toolData = await localTool.handler(call.function.arguments, images, files);
-          else {
-            // 调试日志：确认即将透传到 MCP 的 Host 值
-            console.log(`${STYLES.cyan}[Executor -> MCP] Calling '${call.function.name}' (Execution ID: ${executionId})${STYLES.reset}`);
-            
-            const toolRes = await fetch(`${CONFIG.RESOURCE_MCP_URL}/call`, { 
-              method: 'POST', 
-              headers: { 'Content-Type': 'application/json' }, 
-              body: JSON.stringify({ 
-                name: call.function.name, 
-                arguments: call.function.arguments,
-                execution_id: executionId,
-                clientHost: finalHost // 确保透传 finalHost
-              }) 
-            });
-            toolData = await toolRes.json();
-          }
-
-          const text = toolData.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
-          const capturedImagesFromTool = toolData.content.filter(c => c.type === 'image').map(c => c.data);
-
-          // 打印工具执行结果
-          const resultPreview = text.length > 500 ? text.substring(0, 500) + "..." : text;
-          const resultLog = `[Tool Result] ${call.function.name}: ${resultPreview}${capturedImagesFromTool.length > 0 ? ` (+${capturedImagesFromTool.length} images)` : ''}`;
-          console.log(`${STYLES.dim}${resultLog}${STYLES.reset}`);
-          relayLog(resultLog);
-
-          if (capturedImagesFromTool && capturedImagesFromTool.length > 0) capturedImages = capturedImages.concat(capturedImagesFromTool);
-          
-          messages.push({ role: 'tool', content: text, tool_call_id: call.id });
-          
-          if (capturedImagesFromTool && capturedImagesFromTool.length > 0) {
-            messages.push({ role: 'user', content: "Attached captured visuals.", images: capturedImagesFromTool });
-          }
-          
-        }
-        continue;
-      }
-      return { content: fullContent, tokens: { prompt: promptTokens, completion: completionTokens }, images: capturedImages };
-    }
-  } catch (e) {
-    if (e.name === 'AbortError') return { content: "--- Expert Inference Terminated ---", tokens: { prompt: 0, completion: 0 } };
-    throw e;
-  } finally {
-    currentExpertAbortController = null;
+  if (images && images.length > 0) {
+    messages[1].images = images.map(img => typeof img === 'string' ? img : img.data);
   }
+
+  let executionResults = [];
+  let totalPrompt = 0;
+  let totalCompletion = 0;
+  let allCapturedImages = [];
+
+  for (let i = 0; i < planJSON.plan.length; i++) {
+    const step = planJSON.plan[i];
+    const stepLog = `\n[Execute_Loop] Processing Step ${i+1}/${planJSON.plan.length}: ${step}`;
+    console.log(`${STYLES.cyan}${stepLog}${STYLES.reset}`);
+    relayLog(stepLog);
+
+    messages.push({ role: 'user', content: `[Execute_Loop] 请执行计划的第 ${i+1} 步: ${step}` });
+    
+    const stepRes = await runExpertStep(skill, messages, authorizedTools, currentId, finalHost, images, files);
+    messages = stepRes.messages;
+    totalPrompt += stepRes.promptTokens;
+    totalCompletion += stepRes.completionTokens;
+    allCapturedImages = allCapturedImages.concat(stepRes.capturedImages);
+    
+    executionResults.push({ step: step, output: stepRes.content });
+  }
+
+  return { results: executionResults, tokens: { prompt: totalPrompt, completion: totalCompletion }, images: allCapturedImages };
 }
 
+// ============================================================================
+// STAGE 3: REPORTER
+// ============================================================================
+async function runReporter(instruction, loopData) {
+  const reporterPrompt = `原始任务: "${instruction}"\n\n【Execute_Loop 执行结果 (JSON)】\n${JSON.stringify(loopData.results, null, 2)}\n\n作为 Reporter (汇报者)，你的任务是综合这些步骤的执行结果，向用户汇报最终总结。你必须且只能返回一个合法的 JSON 对象，不要包含 markdown 代码块标记，结构如下：\n{\n  "report": "<向用户汇报的最终 Markdown 格式文本总结>"\n}`;
+
+  const response = await fetch(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 
+      model: CONFIG.EXECUTOR_LLM.MODEL, 
+      messages: [{ role: 'user', content: reporterPrompt }], 
+      think: false, 
+      stream: false,
+      options: { temperature: 0.3 }
+    })
+  });
+
+  const data = await response.json();
+  const rawText = data.message.content.trim();
+  
+  let reportText = "Reporter failed to generate summary.";
+  try {
+     let cleanText = rawText.replace(/```json/i, '').replace(/```/g, '').trim();
+     const start = cleanText.indexOf('{');
+     const end = cleanText.lastIndexOf('}');
+     if (start !== -1 && end !== -1) {
+         cleanText = cleanText.substring(start, end + 1);
+     }
+     const parsed = JSON.parse(cleanText);
+     reportText = parsed.report || rawText;
+  } catch (e) {
+     reportText = rawText;
+  }
+  
+  relayLog(`\n[Reporter Output]\n${reportText}`);
+  return reportText;
+}
+
+// ============================================================================
+// MAIN ROUTES
+// ============================================================================
 app.post("/call", async (req, res) => 
 {
   executionCounter++;
   const currentId = executionCounter;
-
   const { name, arguments: args, skill_name, images, files, clientHost } = req.body;
   
-  if (files && files.length > 0) {
-    relayLog(`[DEBUG] /call received ${files.length} files`);
-  }
+  if (files && files.length > 0) relayLog(`[DEBUG] /call received ${files.length} files`);
 
-  if (skill_name) {
-    const targetSkill = skills.find(s => s.name === skill_name);
-    if (!targetSkill) return res.status(404).json({ error: `Skill '${skill_name}' not found.` });
-    const instruction = args?.task || `Perform ${skill_name}`;
-    const expertRes = await runStatelessLLM(targetSkill, instruction, images, files, clientHost, currentId);
-    return res.json({ content: [{ type: "text", text: expertRes.content }], tokens: { prompt: expertRes.tokens.prompt, completion: expertRes.tokens.completion }, images: expertRes.images || [] });
-  }
-
-  if (name !== "delegate_task") return res.status(404).json({ error: "Only delegate_task allowed" });
-
-  const instruction = args.task;
+  const instruction = args?.task || `Perform ${skill_name}`;
   const delegateLog = `[DELEGATE] Task: ${instruction} (Execution ID: ${currentId})`;
   console.log(`${STYLES.bold}${delegateLog}${STYLES.reset}`);
   relayLog(delegateLog);
   
-  const currentConfig = JSON.parse(fs.readFileSync('config.json', 'utf8'));
-  let totalPrompt = 0;
-  let totalCompletion = 0;
   const enabledSkills = getEnabledSkills();
 
-  try
-  {
-    let contextHint = "";
-    if (files && files.length > 0) contextHint += `\n[Context: ${files.length} file(s) attached to session]`;
-    if (images && images.length > 0) contextHint += `\n[Context: ${images.length} image(s) attached to session]`;
+  try {
+    let totalPrompt = 0;
+    let totalCompletion = 0;
 
-    const skillSpecs = enabledSkills.map(s => `- ${s.name}: ${s.description}`).join('\n');
-    const routerPrompt = `Task: "${instruction}"${contextHint}\n\n作为任务调度中心，你必须强制执行【链式思维】。请先根据任务目标制定一个简明扼要的执行计划，然后再从以下列表中选择最合适的专家技能：\n${skillSpecs}\n\n你的回复必须严格遵循以下格式：\n[PLAN]\n1. 你的第一步计划\n2. 你的第二步计划...\n[EXPERT]\n<skill_name 或 NONE>`;
+    // --- STAGE 1: PLANNER ---
+    relayLog(`[STAGE 1] Planner is analyzing the task...`);
+    let planJSON;
 
-    // 关键修复：发送给 Ollama 的 images 必须是纯 Base64 字符串数组
-    const formattedImages = images ? images.map(img => typeof img === 'string' ? img : img.data) : [];
+    if (skill_name) {
+      planJSON = { expert: skill_name, goal: instruction, plan: [`Execute requested task: ${instruction}`] };
+    } else {
+      planJSON = await runPlanner(instruction, enabledSkills, files, images);
+      relayLog(`[Planner Decision] Expert: ${planJSON.expert}\n[Plan Steps]\n${planJSON.plan.map((p,i)=>`${i+1}. ${p}`).join('\n')}`);
+    }
 
-    const routerResponse = await fetch(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages: [{ role: 'user', content: routerPrompt, images: formattedImages }], think: false ,stream: false, options: { temperature: 0.2 } })
+    if (!planJSON.expert || planJSON.expert.toUpperCase() === "NONE" || !enabledSkills.find(s => s.name === planJSON.expert)) {
+      return res.json({ content: [{ type: "text", text: `No suitable skill found. Planner output: ${JSON.stringify(planJSON)}` }], tokens: { prompt: totalPrompt, completion: totalCompletion } });
+    }
+
+    const bestSkill = enabledSkills.find(s => s.name === planJSON.expert);
+
+    // --- STAGE 2: EXECUTE LOOP ---
+    relayLog(`\n[STAGE 2] Execute_Loop starting with expert: ${bestSkill.name}`);
+    const loopData = await runExecuteLoop(planJSON, bestSkill, instruction, images, files, clientHost, currentId);
+    totalPrompt += loopData.tokens.prompt;
+    totalCompletion += loopData.tokens.completion;
+
+    // --- STAGE 3: REPORTER ---
+    relayLog(`\n[STAGE 3] Reporter is compiling the final summary...`);
+    const finalReportText = await runReporter(instruction, loopData);
+
+    res.json({ 
+      content: [{ type: "text", text: finalReportText }], 
+      tokens: { prompt: totalPrompt, completion: totalCompletion }, 
+      images: loopData.images || [] 
     });
-
-    const routerData = await routerResponse.json();
-    const rawDecision = routerData.message.content.trim();
-
-    let plan = "";
-    let decision = "NONE";
-
-    const planMatch = rawDecision.match(/\[PLAN\]([\s\S]*?)\[EXPERT\]/i);
-    const expertMatch = rawDecision.match(/\[EXPERT\]\s*\n?\s*([a-zA-Z0-9_]+)/i);
-
-    if (planMatch) plan = planMatch[1].trim();
-    if (expertMatch) decision = expertMatch[1].trim();
-
-    if (rawDecision) {
-      const decisionLog = `[Dispatcher Plan]\n${plan}\n[Dispatcher Expert] ${decision}`;
-      console.log(`${STYLES.yellow}${decisionLog}${STYLES.reset}\n`);
-      relayLog(decisionLog);
-    }
-
-    if (decision.toUpperCase() === "NONE" || !enabledSkills.find(s => s.name === decision)) {
-      return res.json({ content: [{ type: "text", text: `No suitable skill found. Raw output: ${rawDecision}` }], tokens: { prompt: totalPrompt, completion: totalCompletion } });
-    }
-
-    const bestSkill = enabledSkills.find(s => s.name === decision);
-    const expertInstruction = `【调度中心计划】\n${plan}\n\n【用户原始任务】\n${instruction}\n\n请严格按照上述计划执行工具调用。`;
-    const expertRes = await runStatelessLLM(bestSkill, expertInstruction, images, files, clientHost, currentId);    res.json({ content: [{ type: "text", text: expertRes.content }], tokens: { prompt: expertRes.tokens.prompt, completion: expertRes.tokens.completion }, images: expertRes.images || [] });
-  }
-  catch (e) {
+  } catch (e) {
     console.error(`[ERROR] ${e.message}`);
     relayLog(`Error: ${e.message}`);
     res.status(500).json({ error: e.message });
@@ -524,16 +572,16 @@ app.get("/list", (req, res) => {
       description: "Mandatory tool for all system-level operations. Use this to search files, read/write data, manage processes, analyze screens, or check system status. If the user asks 'where is...', 'find...', 'how much memory...', or mentions any file/system action, you MUST use this tool.", 
       inputSchema: { 
         type: "object", 
-        properties: { 
-          task: { type: "string", description: "The specific instruction for the executor expert." } 
-        }, 
+        properties: { task: { type: "string", description: "The specific instruction for the executor expert." } }, 
         required: ["task"] 
       } 
     }] 
   });
 });
+
 app.get("/skills", (req, res) => res.json({ skills }));
 app.get("/mcp_tools", (req, res) => res.json({ remote: resourceTools, local: localTools }));
+
 app.post("/set_skill_status", (req, res) => {
   const { name, enabled } = req.body;
   const filePath = path.join(__dirname, 'functions', `${name}.func`);
@@ -543,13 +591,12 @@ app.post("/set_skill_status", (req, res) => {
   loadSkills();
   res.json({ message: "OK" });
 });
+
 app.get("/capabilities", (req, res) => { 
-  const summary = skills
-    .filter(s => s.enabled !== false)
-    .map(s => `- ${s.description}`)
-    .join('\n');
+  const summary = skills.filter(s => s.enabled !== false).map(s => `- ${s.description}`).join('\n');
   res.json({ summary: `The Executor is capable of performing the following types of tasks:\n${summary}\n\nGeneral Domains: File System (CRUD/Search), Desktop Vision, Hardware & Environment Monitoring, Process Management, and Code Engineering.` }); 
 });
+
 app.get("/system_prompt", (req, res) => {
   try {
     const template = fs.readFileSync('exe_system.md', 'utf8');
@@ -558,6 +605,7 @@ app.get("/system_prompt", (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
 app.post("/reboot", (req, res) => { res.json({ message: "OK" }); setTimeout(() => process.exit(99), 100); });
 
 app.post("/interrupt", (req, res) => {
@@ -570,16 +618,15 @@ app.post("/interrupt", (req, res) => {
   res.json({ message: "No active inference" });
 });
 
-function getEnabledSkills() { return skills.filter(s => s.enabled !== false); }
-
 async function start() {
   loadSkills();
   await syncResourceTools();
-  await fetchInitialEnvInfo(); // 启动时获取系统环境
+  await fetchInitialEnvInfo();
   const msg = `Executor ready on ${CONFIG.EXECUTOR_PORT}`;
   app.listen(CONFIG.EXECUTOR_PORT, "0.0.0.0", () => {
     console.log(msg);
     relayLog(msg);
   });
 }
+
 start();
