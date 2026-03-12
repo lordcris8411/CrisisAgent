@@ -11,10 +11,24 @@ app.use(express.json({ limit: '100mb' }));
 
 const STYLES = { reset: '\x1b[0m', green: '\x1b[32m', cyan: '\x1b[36m', bold: '\x1b[1m', dim: '\x1b[2m', red: '\x1b[31m', yellow: '\x1b[33m' };
 
+// 带有超时机制的 fetch
+async function fetchWithTimeout(url, options = {}, timeout = 60000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(id);
+    return response;
+  } catch (e) {
+    clearTimeout(id);
+    throw e;
+  }
+}
+
 function relayLog(content, type = 'console_log') {
   const cleanText = content.replace(/\x1b\[[0-9;]*m/g, '');
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 100);
+  const timeout = setTimeout(() => controller.abort(), 200);
   fetch(`http://localhost:3002/api/log`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -27,10 +41,21 @@ let skills = [], resourceTools = [], currentExpertAbortController = null, cached
 
 async function fetchInitialEnvInfo() {
   try {
-    const res = await fetch(`${CONFIG.RESOURCE_MCP_URL}/call`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'get_env_info', arguments: {}, execution_id: -1 }) });
+    relayLog("[Executor] Fetching initial env info...");
+    const res = await fetchWithTimeout(`${CONFIG.RESOURCE_MCP_URL}/call`, { 
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, 
+      body: JSON.stringify({ name: 'get_env_info', arguments: {}, execution_id: -1 }) 
+    }, 10000);
     const data = await res.json();
-    if (data.content?.[0]) { cachedEnvInfo = data.content[0].text; console.log(`${STYLES.green}[Executor] Env context loaded.${STYLES.reset}`); }
-  } catch (e) { console.error(`${STYLES.red}[Executor] Env load failed: ${e.message}${STYLES.reset}`); }
+    if (data.content?.[0]) { 
+      cachedEnvInfo = data.content[0].text; 
+      console.log(`${STYLES.green}[Executor] Env context loaded.${STYLES.reset}`); 
+      relayLog("[Executor] Env context loaded.");
+    }
+  } catch (e) { 
+    console.error(`${STYLES.red}[Executor] Env load failed: ${e.message}${STYLES.reset}`); 
+    relayLog(`[Executor ERROR] Env load failed: ${e.message}`);
+  }
 }
 
 const localTools = [
@@ -71,7 +96,10 @@ const localTools = [
     inputSchema: { type: "object", properties: { tool_name: { type: "string" }, execution_id: { type: "integer" } }, required: ["tool_name"] },
     handler: async (args) => {
       const localTarget = localTools.find(t => t.name === args.tool_name); if (localTarget) return { content: [{ type: "text", text: JSON.stringify(localTarget.inputSchema) }] };
-      const toolRes = await fetch(`${CONFIG.RESOURCE_MCP_URL}/call`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'get_tool_usage', arguments: { tool_name: args.tool_name }, execution_id: args.execution_id }) });
+      const toolRes = await fetchWithTimeout(`${CONFIG.RESOURCE_MCP_URL}/call`, { 
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ name: 'get_tool_usage', arguments: { tool_name: args.tool_name }, execution_id: args.execution_id }) 
+      }, 10000);
       return await toolRes.json();
     }
   }
@@ -84,42 +112,62 @@ function loadSkills() {
 }
 
 async function syncResourceTools() {
-  try { const res = await fetch(`${CONFIG.RESOURCE_MCP_URL}/list`); resourceTools = (await res.json()).tools; } catch (e) {}
+  try { 
+    const res = await fetchWithTimeout(`${CONFIG.RESOURCE_MCP_URL}/list`, {}, 5000); 
+    resourceTools = (await res.json()).tools; 
+  } catch (e) { relayLog(`[Executor WARNING] syncResourceTools failed: ${e.message}`); }
 }
 
 function getEnabledSkills() { return skills.filter(s => s.enabled !== false); }
 
+// ============================================================================
+// STAGE 1: PLANNER
+// ============================================================================
 async function runPlanner(instructionJSON, enabledSkills, files, images) {
   const skillSpecs = enabledSkills.map(s => `- ${s.name}: ${s.description}\n  [Tools]: ${s.use.join(', ')}`).join('\n');
   const plannerPrompt = `Planner Center.\nTask: ${JSON.stringify(instructionJSON)}\nExperts:\n${skillSpecs}\nMust output JSON: {"expert": "...", "goal": "...", "plan": ["..."]}`;
-  relayLog(`\n[STAGE 1] Planning mission...`);
+  
+  relayLog(`\n[STAGE 1] Requesting Plan from LLM...`);
   const formattedImages = images ? images.map(img => typeof img === 'string' ? img : img.data) : [];
-  const response = await fetch(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages: [{ role: 'user', content: plannerPrompt, images: formattedImages }], think: false, stream: false, options: { temperature: 0 } })
-  });
-  const data = await response.json();
+  
   try {
-     let cleanText = data.message.content.trim().replace(/```json/i, '').replace(/```/g, '').trim();
-     const start = cleanText.indexOf('{'), end = cleanText.lastIndexOf('}');
-     if (start !== -1 && end !== -1) cleanText = cleanText.substring(start, end + 1);
-     const planJSON = JSON.parse(cleanText);
-     relayLog(`[Planner Decision] Expert: ${planJSON.expert}, Steps: ${planJSON.plan.length}`);
-     return planJSON;
-  } catch (e) { throw new Error(`Planner failed to generate valid JSON.`); }
+    const response = await fetchWithTimeout(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages: [{ role: 'user', content: plannerPrompt, images: formattedImages }], think: false, stream: false, options: { temperature: 0 } })
+    }, 60000); // 60s timeout
+    
+    const data = await response.json();
+    let cleanText = data.message.content.trim().replace(/```json/i, '').replace(/```/g, '').trim();
+    const start = cleanText.indexOf('{'), end = cleanText.lastIndexOf('}');
+    if (start !== -1 && end !== -1) cleanText = cleanText.substring(start, end + 1);
+    const planJSON = JSON.parse(cleanText);
+    relayLog(`[Planner Decision] Expert: ${planJSON.expert}, Steps: ${planJSON.plan.length}`);
+    return planJSON;
+  } catch (e) { 
+    relayLog(`[STAGE 1 ERROR] ${e.message}`);
+    throw e; 
+  }
 }
 
+// ============================================================================
+// STAGE 2: EXECUTE LOOP
+// ============================================================================
 async function runExpertStep(skill, messages, authorizedTools, executionId, finalHost, sessionImages, sessionFiles) {
   const currentConfig = JSON.parse(fs.readFileSync('config.json', 'utf8'));
   let promptTokens = 0, completionTokens = 0, capturedImages = [], stepFinalContent = "";
+  
   while (true) {
     currentExpertAbortController = new AbortController();
-    const response = await fetch(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
+    relayLog(`[Expert] Requesting LLM response (streaming)...`);
+    
+    const response = await fetchWithTimeout(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
       method: 'POST', body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages, tools: authorizedTools, think: false, stream: true }),
       signal: currentExpertAbortController.signal
-    });
+    }, 120000); // 120s timeout for stream start
+    
     const reader = response.body.getReader(), decoder = new TextDecoder();
     let fullContent = "", toolCalls = [], buffer = '';
+    
     while (true) {
       const { done, value } = await reader.read(); if (done) break;
       buffer += decoder.decode(value, { stream: true });
@@ -135,29 +183,35 @@ async function runExpertStep(skill, messages, authorizedTools, executionId, fina
         } catch (e) {}
       }
     }
+    
     const assistantMsg = { role: 'assistant', content: fullContent }; if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls;
     messages.push(assistantMsg);
+    
     if (toolCalls.length > 0) {
       for (const call of toolCalls) {
         if (call.function.name === 'get_tool_usage') call.function.arguments.execution_id = executionId;
-        
-        // 关键：打印工具调用请求到 Web UI
         relayLog(`[Tool Request] ${call.function.name}: ${JSON.stringify(call.function.arguments)}`);
         
         let toolData; const localTool = localTools.find(t => t.name === call.function.name);
-        if (localTool) toolData = await localTool.handler(call.function.arguments, sessionImages, sessionFiles);
-        else {
-          const toolRes = await fetch(`${CONFIG.RESOURCE_MCP_URL}/call`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: call.function.name, arguments: call.function.arguments, execution_id: executionId, clientHost: finalHost }) });
-          toolData = await toolRes.json();
+        try {
+          if (localTool) toolData = await localTool.handler(call.function.arguments, sessionImages, sessionFiles);
+          else {
+            const toolRes = await fetchWithTimeout(`${CONFIG.RESOURCE_MCP_URL}/call`, { 
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, 
+              body: JSON.stringify({ name: call.function.name, arguments: call.function.arguments, execution_id: executionId, clientHost: finalHost }) 
+            }, 30000); // 30s timeout for tool
+            toolData = await toolRes.json();
+          }
+          const text = toolData.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+          const imgs = toolData.content.filter(c => c.type === 'image').map(c => c.data);
+          if (imgs.length > 0) capturedImages = capturedImages.concat(imgs);
+          messages.push({ role: 'tool', content: text, tool_call_id: call.id });
+          if (imgs.length > 0) messages.push({ role: 'user', content: "Attached captured visuals.", images: imgs });
+          relayLog(`[Tool Response] ${call.function.name}: ${text.length > 200 ? text.substring(0, 200) + '...' : text}`);
+        } catch (te) {
+          relayLog(`[Tool ERROR] ${call.function.name}: ${te.message}`);
+          messages.push({ role: 'tool', content: `Error: ${te.message}`, tool_call_id: call.id });
         }
-        const text = toolData.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
-        const imgs = toolData.content.filter(c => c.type === 'image').map(c => c.data);
-        if (imgs.length > 0) capturedImages = capturedImages.concat(imgs);
-        messages.push({ role: 'tool', content: text, tool_call_id: call.id });
-        if (imgs.length > 0) messages.push({ role: 'user', content: "Attached captured visuals.", images: imgs });
-        
-        // 关键：打印工具调用结果到 Web UI
-        relayLog(`[Tool Response] ${call.function.name}: ${text.length > 500 ? text.substring(0, 500) + '...' : text}`);
       }
       continue;
     }
@@ -177,14 +231,20 @@ async function runExecuteLoop(planJSON, skill, instructionJSON, images, files, c
   let messages = [{ role: 'system', content: expertSystemPrompt }, { role: 'user', content: `Start mission loop. Plan: ${JSON.stringify(planJSON.plan)}` }];
   if (images && images.length > 0) messages[1].images = images.map(img => typeof img === 'string' ? img : img.data);
   let results = [], totalP = 0, totalC = 0, allImgs = [];
+  
   relayLog(`\n[STAGE 2] Execute_Loop with expert [${skill.name}]`);
   for (let i = 0; i < planJSON.plan.length; i++) {
     relayLog(`\n[STEP ${i+1}/${planJSON.plan.length}] ${planJSON.plan[i]}`);
     messages.push({ role: 'user', content: `Execute step ${i+1}: ${planJSON.plan[i]}` });
-    const stepRes = await runExpertStep(skill, messages, authorizedTools, currentId, finalHost, images, files);
-    messages = stepRes.messages; totalP += stepRes.promptTokens; totalC += stepRes.completionTokens;
-    allImgs = allImgs.concat(stepRes.capturedImages);
-    results.push({ step: planJSON.plan[i], output: stepRes.content });
+    try {
+      const stepRes = await runExpertStep(skill, messages, authorizedTools, currentId, finalHost, images, files);
+      messages = stepRes.messages; totalP += stepRes.promptTokens; totalC += stepRes.completionTokens;
+      allImgs = allImgs.concat(stepRes.capturedImages);
+      results.push({ step: planJSON.plan[i], output: stepRes.content });
+    } catch (se) {
+      relayLog(`[STAGE 2 ERROR] Step ${i+1} failed: ${se.message}`);
+      throw se;
+    }
   }
   return { results, tokens: { prompt: totalP, completion: totalC }, images: allImgs };
 }
@@ -192,17 +252,22 @@ async function runExecuteLoop(planJSON, skill, instructionJSON, images, files, c
 async function runReporter(instructionJSON, loopData) {
   const reporterPrompt = `Original Task: ${JSON.stringify(instructionJSON)}\nHistory: ${JSON.stringify(loopData.results)}\nSummarize mission in Markdown. Return JSON: {"report": "..."}`;
   relayLog(`\n[STAGE 3] Finalizing report...`);
-  const response = await fetch(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages: [{ role: 'user', content: reporterPrompt }], think: false, stream: false, options: { temperature: 0.2 } })
-  });
-  const data = await response.json();
   try {
-     let cleanText = data.message.content.trim().replace(/```json/i, '').replace(/```/g, '').trim();
-     const start = cleanText.indexOf('{'), end = cleanText.lastIndexOf('}');
-     if (start !== -1 && end !== -1) cleanText = cleanText.substring(start, end + 1);
-     return JSON.parse(cleanText);
-  } catch (e) { return { report: data.message.content }; }
+    const response = await fetchWithTimeout(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages: [{ role: 'user', content: reporterPrompt }], think: false, stream: false, options: { temperature: 0.2 } })
+    }, 60000);
+    const data = await response.json();
+    let cleanText = data.message.content.trim().replace(/```json/i, '').replace(/```/g, '').trim();
+    const start = cleanText.indexOf('{'), end = cleanText.lastIndexOf('}');
+    if (start !== -1 && end !== -1) cleanText = cleanText.substring(start, end + 1);
+    const finalReport = JSON.parse(cleanText);
+    relayLog(`[STAGE 3] Reporter Success.`);
+    return finalReport;
+  } catch (e) { 
+    relayLog(`[STAGE 3 WARNING] Reporter failed: ${e.message}`);
+    return { report: "Mission Summary Unavailable (Error during reporting)." }; 
+  }
 }
 
 app.post("/call", async (req, res) => {
@@ -212,6 +277,7 @@ app.post("/call", async (req, res) => {
   const instruction = request.message || "No instruction";
   const files = request.attachment || [];
   const images = request.data?.images || [];
+  
   relayLog(`\n${STYLES.bold}>>> MISSION START [ID: ${currentId}]: ${instruction}${STYLES.reset}`);
   const enabledSkills = getEnabledSkills();
   try {
@@ -222,8 +288,8 @@ app.post("/call", async (req, res) => {
     relayLog(`\n${STYLES.bold}<<< MISSION COMPLETE [ID: ${currentId}]${STYLES.reset}\n`);
     res.json({ result: true, message: finalReport.report, attachment: files, data: { images: loopData.images || [], tokens: loopData.tokens, planner: planJSON } });
   } catch (e) {
-    relayLog(`[ERROR] ${e.message}`);
-    res.status(500).json({ result: false, message: e.message, attachment: [], data: {} });
+    relayLog(`[CRITICAL MISSION ERROR] ${e.message}`);
+    res.status(500).json({ result: false, message: `Mission Failed: ${e.message}`, attachment: [], data: {} });
   }
 });
 
@@ -243,6 +309,8 @@ app.get("/capabilities", (req, res) => { res.json({ summary: `Capabilities:\n${s
 app.get("/system_prompt", (req, res) => { try { res.json({ template: fs.readFileSync('exe_system.md', 'utf8'), env_context: cachedEnvInfo }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post("/reboot", (req, res) => { res.json({ result: true }); setTimeout(() => process.exit(99), 100); });
 app.post("/interrupt", (req, res) => { if (currentExpertAbortController) { currentExpertAbortController.abort(); currentExpertAbortController = null; return res.json({ result: true, message: "Interrupted" }); } res.json({ result: false, message: "No active inference" }); });
+
+process.on('unhandledRejection', (reason, promise) => { relayLog(`[Executor FATAL] Unhandled Rejection: ${reason.stack || reason}`); });
 
 async function start() {
   loadSkills(); await syncResourceTools(); await fetchInitialEnvInfo();
