@@ -9,7 +9,7 @@ const STYLES = { red: '\x1b[31m', reset: '\x1b[0m' };
 const definitions = 
 [
   { name: "get_screen_resolution", description: "Get the dynamic screen resolution (width and height) of the primary monitor.", inputSchema: { type: "object", properties: {} } },
-  { name: "capture_screen", description: "Capture the system desktop screen at its current native resolution. Returns a JPEG image.", inputSchema: { type: "object", properties: {} } },
+  { name: "capture_screen", description: "Capture the system desktop screen at its current native resolution. Saves to disk and returns a downloadable URL.", inputSchema: { type: "object", properties: {} } },
   { name: "get_current_time", description: "Get system clock time in 'YYYY-MM-DD HH:mm:ss' format. Supports optional timezone.", inputSchema: { type: "object", properties: { timezone: { type: "string", description: "Optional IANA timezone string (e.g., 'America/New_York', 'Asia/Shanghai'). Defaults to system local time." } } } },
   { name: "get_system_stats", description: "Get CPU usage, memory usage, and free disk space on this machine.", inputSchema: { type: "object", properties: {} } },
   { name: "get_hardware_info", description: "Get detailed hardware specifications (CPU, RAM, GPU, OS) of this machine.", inputSchema: { type: "object", properties: {} } },

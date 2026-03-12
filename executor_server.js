@@ -12,7 +12,7 @@ app.use(express.json({ limit: '100mb' }));
 const STYLES = { reset: '\x1b[0m', green: '\x1b[32m', cyan: '\x1b[36m', bold: '\x1b[1m', dim: '\x1b[2m', red: '\x1b[31m', yellow: '\x1b[33m' };
 
 // ============================================================================
-// UTILITIES
+// UTILITIES & STATE
 // ============================================================================
 function safeParseJSON(raw) {
   if (!raw) return null;
@@ -77,6 +77,21 @@ const localTools = [
       } catch (e) { return { isError: true, content: [{ type: "text", text: e.message }] }; } 
     } 
   },
+  {
+    name: "save_uploaded_file", description: "Save uploaded file.",
+    inputSchema: { type: "object", properties: { file_index: { type: "integer" }, local_path: { type: "string" } } },
+    handler: async (args, sessionImages, sessionFiles) => {
+      try {
+        let idx = args.file_index; if (idx === undefined && sessionFiles?.length === 1) idx = 0;
+        if (!sessionFiles?.[idx]) throw new Error("File not found");
+        const file = sessionFiles[idx];
+        const targetPath = path.resolve(args.local_path || `uploads/${file.name}`);
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, Buffer.from(file.data, 'base64'));
+        return { content: [{ type: "text", text: `SUCCESS: Saved to ${targetPath}` }] };
+      } catch (e) { return { isError: true, content: [{ type: "text", text: e.message }] }; }
+    }
+  },
   { 
     name: "get_tool_usage", description: "Get tool schema.", 
     inputSchema: { type: "object", properties: { tool_name: { type: "string" }, execution_id: { type: "integer" } }, required: ["tool_name"] }, 
@@ -102,14 +117,18 @@ async function runPlanner(instruction, enabledSkills, files, images) {
   const plannerPrompt = `### MISSION PLANNER PROTOCOL
 You are the strategist. Decompose the User Task into logical steps.
 
+### INPUT
+Task: "${instruction}"
+Files: ${JSON.stringify(files || [])}
+Images: ${images ? images.length : 0} attached.
+
 ### AVAILABLE EXPERTS & TOOLS
 ${skillSpecs}
 
-### OUTPUT FORMAT (STRICT JSON)
-{
-  "goal": "Summary",
-  "plan": [ { "expert": "ExpertName", "step": "Action" } ]
-}`;
+### PLANNING RULES
+1. **Logical Order**: Capture tools (e.g. screen_reader) MUST come before analysis tools (e.g. visual_analyst).
+2. **Precision**: Choose the Expert whose tools match the action.
+3. **Format**: Return ONLY JSON: {"goal": "...", "plan": [{"expert": "...", "step": "..."}]}`;
 
   relayLog(`\n[STAGE 1] PLANNING MISSION...`);
   try {
@@ -225,7 +244,7 @@ async function runReporter(instruction, loopData) {
 }
 
 // ============================================================================
-// ROUTES & START
+// ROUTES
 // ============================================================================
 app.post("/call", async (req, res) => {
   executionCounter++; const currentId = executionCounter;
