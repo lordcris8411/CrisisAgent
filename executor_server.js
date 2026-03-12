@@ -11,6 +11,30 @@ app.use(express.json({ limit: '100mb' }));
 
 const STYLES = { reset: '\x1b[0m', green: '\x1b[32m', cyan: '\x1b[36m', bold: '\x1b[1m', dim: '\x1b[2m', red: '\x1b[31m', yellow: '\x1b[33m' };
 
+// 鲁棒的 JSON 解析器：自动剥离 Markdown 块和杂质
+function safeParseJSON(raw) {
+  if (!raw) return null;
+  let clean = raw.trim();
+  // 剥离 ```json ... ``` 或 ``` ... ```
+  clean = clean.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  try {
+    // 尝试直接解析
+    return JSON.parse(clean);
+  } catch (e) {
+    // 尝试寻找第一个 { 和最后一个 }
+    const start = clean.indexOf('{');
+    const end = clean.lastIndexOf('}');
+    if (start !== -1 && end !== -1) {
+      try {
+        return JSON.parse(clean.substring(start, end + 1));
+      } catch (e2) {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
 async function fetchWithTimeout(url, options = {}, timeout = 60000) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
@@ -37,13 +61,13 @@ async function fetchInitialEnvInfo() {
   try {
     const res = await fetchWithTimeout(`${CONFIG.RESOURCE_MCP_URL}/call`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'get_env_info', arguments: {}, execution_id: -1 }) }, 10000);
     const data = await res.json();
-    if (data.content?.[0]) { cachedEnvInfo = data.content[0].text; console.log(`${STYLES.green}[Executor] Env context loaded.${STYLES.reset}`); }
-  } catch (e) { console.error(`${STYLES.red}[Executor] Env load failed: ${e.message}${STYLES.reset}`); }
+    if (data.content?.[0]) cachedEnvInfo = data.content[0].text;
+  } catch (e) {}
 }
 
 const localTools = [
   {
-    name: "read_local_file", description: "Read local mcp_server file.",
+    name: "read_local_file", description: "Read local file.",
     inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     handler: async (args) => ({ content: [{ type: "text", text: fs.readFileSync(path.resolve(__dirname, 'mcp_server', args.path), 'utf8') }] })
   },
@@ -100,39 +124,27 @@ async function runPlanner(instructionJSON, enabledSkills, files, images) {
   const skillSpecs = enabledSkills.map(s => `- Expert Name: "${s.name}"\n  Description: ${s.description}\n  Tools: [${s.use.join(', ')}]`).join('\n');
   const plannerPrompt = `You are the MISSION PLANNER.
 Task: ${JSON.stringify(instructionJSON)}
-
-### AVAILABLE EXPERTS
+AVAILABLE EXPERTS:
 ${skillSpecs}
-
-### RULES
-1. Select the Expert whose "Tools" strictly match the Task requirements.
-2. Break the Task into logical "plan" steps.
-3. You MUST return ONLY a JSON object matching this schema:
-{
-  "expert": "The exact Expert Name from the list",
-  "goal": "Brief goal description",
-  "plan": ["Step 1 description", "Step 2 description"]
-}`;
+RULES:
+1. Select the Expert whose "Tools" match the Task.
+2. Return logical "plan" steps.
+3. You MUST return ONLY a JSON object: {"expert": "...", "goal": "...", "plan": ["Step 1", "Step 2"]}`;
   
-  relayLog(`\n[STAGE 1] Planning (JSON Mode)...`);
+  relayLog(`\n[STAGE 1] Planning mission...`);
   const formattedImages = images ? images.map(img => typeof img === 'string' ? img : img.data) : [];
   
   try {
     const response = await fetchWithTimeout(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        model: CONFIG.EXECUTOR_LLM.MODEL, 
-        messages: [{ role: 'user', content: plannerPrompt, images: formattedImages }], 
-        think: false, stream: false, format: 'json', options: { temperature: 0 } 
-      })
+      body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages: [{ role: 'user', content: plannerPrompt, images: formattedImages }], think: false, stream: false, format: 'json', options: { temperature: 0 } })
     }, 60000);
-    
     const data = await response.json();
-    const planJSON = JSON.parse(data.message.content.trim());
+    const planJSON = safeParseJSON(data.message.content);
     
-    // 关键修正：确保字段存在
+    if (!planJSON) throw new Error("Planner response is not valid JSON.");
     if (!planJSON.plan) planJSON.plan = [planJSON.goal || "Execute mission"];
-    if (!planJSON.expert && planJSON.tool) planJSON.expert = planJSON.tool; // 容错处理
+    if (!planJSON.expert && planJSON.tool) planJSON.expert = planJSON.tool;
 
     relayLog(`[Planner Result]\n${JSON.stringify(planJSON, null, 2)}`);
     return planJSON;
@@ -171,7 +183,6 @@ async function runExpertStep(skill, messages, authorizedTools, executionId, fina
         } catch (e) {}
       }
     }
-    
     const assistantMsg = { role: 'assistant', content: fullContent }; if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls;
     messages.push(assistantMsg);
     if (toolCalls.length > 0) {
@@ -213,11 +224,10 @@ async function runExecuteLoop(planJSON, skill, instructionJSON, images, files, c
     return { type: 'function', function: { name: t.name, description: `${t.description} (SCHEMA HIDDEN)`, parameters: { type: "object", properties: {}, additionalProperties: true } } };
   });
   let expertSystemPrompt = fs.readFileSync('exe_system.md', 'utf8').replace('{{skill_system}}', skill.system);
-  expertSystemPrompt += `\n\n### CONTEXT\n${cachedEnvInfo}\nMission Goal: ${planJSON.goal}`;
-  let messages = [{ role: 'system', content: expertSystemPrompt }, { role: 'user', content: `Start execution. Plan: ${JSON.stringify(planJSON.plan)}` }];
+  expertSystemPrompt += `\n\n### CONTEXT\n${cachedEnvInfo}\nGoal: ${planJSON.goal}`;
+  let messages = [{ role: 'system', content: expertSystemPrompt }, { role: 'user', content: `Start mission loop. Plan: ${JSON.stringify(planJSON.plan)}` }];
   if (images && images.length > 0) messages[1].images = images.map(img => typeof img === 'string' ? img : img.data);
   let results = [], totalP = 0, totalC = 0, allImgs = [];
-  
   relayLog(`\n[STAGE 2] Execute_Loop with [${skill.name}]`);
   for (let i = 0; i < planJSON.plan.length; i++) {
     relayLog(`\n[STEP ${i+1}/${planJSON.plan.length}] ${planJSON.plan[i]}`);
@@ -233,18 +243,21 @@ async function runExecuteLoop(planJSON, skill, instructionJSON, images, files, c
 }
 
 async function runReporter(instructionJSON, loopData) {
-  const reporterPrompt = `Summarize mission. Original Task: ${JSON.stringify(instructionJSON)}\nHistory: ${JSON.stringify(loopData.results)}\nReturn JSON: {"report": "Markdown content"}`;
-  relayLog(`\n[STAGE 3] Generating Report...`);
+  const reporterPrompt = `Summarize mission. Original Task: ${JSON.stringify(instructionJSON)}\nHistory: ${JSON.stringify(loopData.results)}\nYou MUST return a JSON object: {"report": "Markdown summary"}`;
+  relayLog(`\n[STAGE 3] Finalizing report...`);
   try {
     const response = await fetchWithTimeout(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages: [{ role: 'user', content: reporterPrompt }], think: false, stream: false, format: 'json', options: { temperature: 0.2 } })
     }, 60000);
     const data = await response.json();
-    const finalReport = JSON.parse(data.message.content.trim());
-    relayLog(`\n[Reporter Result]\n${finalReport.report}`);
-    return finalReport;
-  } catch (e) { relayLog(`[STAGE 3 WARNING] Reporter failed: ${e.message}`); return { report: "Summary Unavailable." }; }
+    const rawContent = data.message.content;
+    const parsed = safeParseJSON(rawContent);
+    
+    const reportText = parsed ? parsed.report : rawContent;
+    relayLog(`\n[Reporter Result]\n${reportText}`);
+    return { report: reportText };
+  } catch (e) { relayLog(`[STAGE 3 ERROR] ${e.message}`); return { report: "Summary Error." }; }
 }
 
 app.post("/call", async (req, res) => {
@@ -258,16 +271,14 @@ app.post("/call", async (req, res) => {
   const enabledSkills = getEnabledSkills();
   try {
     const planJSON = await runPlanner({ instruction }, enabledSkills, files, images);
-    // 关键修正：查找专家时的容错与回退
     const bestSkill = enabledSkills.find(s => s.name === planJSON.expert);
-    if (!bestSkill) throw new Error(`Planner failed to select a valid Expert. Planner returned: ${planJSON.expert}`);
-    
+    if (!bestSkill) throw new Error(`Invalid Expert: ${planJSON.expert}`);
     const loopData = await runExecuteLoop(planJSON, bestSkill, { instruction }, images, files, clientHost, currentId);
     const finalReport = await runReporter({ instruction }, loopData);
     relayLog(`\n${STYLES.bold}<<< MISSION COMPLETE [ID: ${currentId}]${STYLES.reset}\n`);
     res.json({ result: true, message: finalReport.report, attachment: files, data: { images: loopData.images || [], tokens: loopData.tokens, planner: planJSON } });
   } catch (e) {
-    relayLog(`[CRITICAL MISSION ERROR] ${e.message}`);
+    relayLog(`[CRITICAL ERROR] ${e.message}`);
     res.status(500).json({ result: false, message: `Mission Failed: ${e.message}`, attachment: [], data: {} });
   }
 });
@@ -288,8 +299,6 @@ app.get("/capabilities", (req, res) => { res.json({ summary: `Capabilities:\n${s
 app.get("/system_prompt", (req, res) => { try { res.json({ template: fs.readFileSync('exe_system.md', 'utf8'), env_context: cachedEnvInfo }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post("/reboot", (req, res) => { res.json({ result: true }); setTimeout(() => process.exit(99), 100); });
 app.post("/interrupt", (req, res) => { if (currentExpertAbortController) { currentExpertAbortController.abort(); currentExpertAbortController = null; return res.json({ result: true, message: "Interrupted" }); } res.json({ result: false, message: "No active inference" }); });
-
-process.on('unhandledRejection', (reason) => { relayLog(`[Executor FATAL] Unhandled Rejection: ${reason.stack || reason}`); });
 
 async function start() {
   loadSkills(); await syncResourceTools(); await fetchInitialEnvInfo();
