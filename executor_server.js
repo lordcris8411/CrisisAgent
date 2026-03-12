@@ -473,33 +473,42 @@ app.post("/call", async (req, res) =>
     if (images && images.length > 0) contextHint += `\n[Context: ${images.length} image(s) attached to session]`;
 
     const skillSpecs = enabledSkills.map(s => `- ${s.name}: ${s.description}`).join('\n');
-    const routerPrompt = `Task: "${instruction}"${contextHint}\n\nChoose the MOST SPECIFIC skill from the following list:\n${skillSpecs}\n\nOutput ONLY the skill name. If no suitable match exists, output 'NONE'.`;
-    
+    const routerPrompt = `Task: "${instruction}"${contextHint}\n\n作为任务调度中心，你必须强制执行【链式思维】。请先根据任务目标制定一个简明扼要的执行计划，然后再从以下列表中选择最合适的专家技能：\n${skillSpecs}\n\n你的回复必须严格遵循以下格式：\n[PLAN]\n1. 你的第一步计划\n2. 你的第二步计划...\n[EXPERT]\n<skill_name 或 NONE>`;
+
     // 关键修复：发送给 Ollama 的 images 必须是纯 Base64 字符串数组
     const formattedImages = images ? images.map(img => typeof img === 'string' ? img : img.data) : [];
 
     const routerResponse = await fetch(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages: [{ role: 'user', content: routerPrompt, images: formattedImages }], think: false ,stream: false, options: { temperature: 0 } })
+      body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages: [{ role: 'user', content: routerPrompt, images: formattedImages }], think: false ,stream: false, options: { temperature: 0.2 } })
     });
 
     const routerData = await routerResponse.json();
-    const decision = routerData.message.content.trim();
-    
-    if (decision) {
-      const decisionLog = `[Dispatcher] Decision: ${decision}`;
+    const rawDecision = routerData.message.content.trim();
+
+    let plan = "";
+    let decision = "NONE";
+
+    const planMatch = rawDecision.match(/\[PLAN\]([\s\S]*?)\[EXPERT\]/i);
+    const expertMatch = rawDecision.match(/\[EXPERT\]\s*\n?\s*([a-zA-Z0-9_]+)/i);
+
+    if (planMatch) plan = planMatch[1].trim();
+    if (expertMatch) decision = expertMatch[1].trim();
+
+    if (rawDecision) {
+      const decisionLog = `[Dispatcher Plan]\n${plan}\n[Dispatcher Expert] ${decision}`;
       console.log(`${STYLES.yellow}${decisionLog}${STYLES.reset}\n`);
       relayLog(decisionLog);
     }
 
-    if (decision.startsWith("NONE") || !enabledSkills.find(s => s.name === decision)) {
-      return res.json({ content: [{ type: "text", text: "No suitable skill found." }], tokens: { prompt: totalPrompt, completion: totalCompletion } });
+    if (decision.toUpperCase() === "NONE" || !enabledSkills.find(s => s.name === decision)) {
+      return res.json({ content: [{ type: "text", text: `No suitable skill found. Raw output: ${rawDecision}` }], tokens: { prompt: totalPrompt, completion: totalCompletion } });
     }
 
     const bestSkill = enabledSkills.find(s => s.name === decision);
-    const expertRes = await runStatelessLLM(bestSkill, instruction, images, files, clientHost, currentId);
-    res.json({ content: [{ type: "text", text: expertRes.content }], tokens: { prompt: expertRes.tokens.prompt, completion: expertRes.tokens.completion }, images: expertRes.images || [] });
+    const expertInstruction = `【调度中心计划】\n${plan}\n\n【用户原始任务】\n${instruction}\n\n请严格按照上述计划执行工具调用。`;
+    const expertRes = await runStatelessLLM(bestSkill, expertInstruction, images, files, clientHost, currentId);    res.json({ content: [{ type: "text", text: expertRes.content }], tokens: { prompt: expertRes.tokens.prompt, completion: expertRes.tokens.completion }, images: expertRes.images || [] });
   }
   catch (e) {
     console.error(`[ERROR] ${e.message}`);
