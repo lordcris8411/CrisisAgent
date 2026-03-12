@@ -305,9 +305,36 @@ async function handle(name, args)
     }
 
     case "capture_screen":
-      const raw = await screenshot({ format: 'png' });
-      const opt = await sharp(raw).jpeg({ quality: 80 }).toBuffer();
-      return { content: [{ type: "image", data: opt.toString('base64'), mimeType: "image/jpeg" }] };
+    {
+      try
+      {
+        const captureDir = path.join(__dirname, '..', 'screen_capture');
+        if (!fs.existsSync(captureDir)) fs.mkdirSync(captureDir, { recursive: true });
+        
+        const filename = `screen_${Date.now()}.jpg`;
+        const localPath = path.join(captureDir, filename);
+        
+        const raw = await screenshot({ format: 'png' });
+        await sharp(raw).jpeg({ quality: 80 }).toFile(localPath);
+        
+        // Construct download URL
+        // clientHost is passed as the 3rd argument to handle
+        const host = arguments[2] || "localhost:3000";
+        const downloadUrl = `http://${host}/download?path=${encodeURIComponent(localPath)}`;
+        const previewUrl = `${downloadUrl}&view=1`;
+
+        return { 
+          content: [{ 
+            type: "text", 
+            text: `Screenshot saved successfully.\nLocal Path: ${localPath}\nDownload URL: ${downloadUrl}\nPreview URL: ${previewUrl}` 
+          }] 
+        };
+      }
+      catch (e)
+      {
+        return { isError: true, content: [{ type: "text", text: `Screen capture failed: ${e.message}` }] };
+      }
+    }
   }
 }
 
