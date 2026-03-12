@@ -1321,6 +1321,28 @@
                     }
                 }
                 else if (data.role === 'user') { currentAssistantMsg = null; currentRawContent = ""; appendMessage(data); }
+                
+                // 处理最终任务结果中的附件（如截图）
+                if (data.type === 'stream_end' && data.full_response && data.full_response.attachment) {
+                    data.full_response.attachment.forEach(att => {
+                        const isImage = att.category === 'image' || /\.(jpg|jpeg|png|gif|webp)$/i.test(att.name || att.url);
+                        if (isImage && att.url) {
+                            const wrapper = document.createElement('div');
+                            wrapper.className = 'message-container';
+                            const el = createMessageElement('assistant');
+                            el.querySelector('.role-tag').innerText = 'ATTACHMENT VIEW';
+                            const img = document.createElement('img'); 
+                            img.className = 'captured-image'; 
+                            img.src = att.url;
+                            img.title = att.name || 'Remote Attachment';
+                            img.onclick = () => openLightbox(img.src); 
+                            el.querySelector('.content').appendChild(img);
+                            wrapper.appendChild(el);
+                            chatHistory.appendChild(wrapper); 
+                            chatHistory.scrollTop = chatHistory.scrollHeight;
+                        }
+                    });
+                }
             };
         }
 
