@@ -27,7 +27,10 @@ function safeParseJSON(raw) {
 
 async function fetchWithTimeout(url, options = {}, timeout = 60000) {
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
+  const id = setTimeout(() => {
+    console.log(`${STYLES.red}[TIMEOUT] ${url}${STYLES.reset}`);
+    controller.abort();
+  }, timeout);
   try {
     const response = await fetch(url, { ...options, signal: controller.signal });
     clearTimeout(id); return response;
@@ -190,7 +193,9 @@ async function runExpertStep(skill, messages, authorizedTools, executionId, fina
           if (imgs.length > 0) capturedImages = capturedImages.concat(imgs);
           messages.push({ role: 'tool', content: text, tool_call_id: call.id });
           if (imgs.length > 0) messages.push({ role: 'user', content: "Attached captured visuals.", images: imgs });
-          relayLog({ "[Tool Response]": { tool: call.function.name, resources: toolResources } });
+          
+          // 关键修正：在日志中包含结果文本 result
+          relayLog({ "[Tool Response]": { tool: call.function.name, result: text, resources: toolResources } });
         } catch (te) { relayLog({ "[Tool ERROR]": te.message }); messages.push({ role: 'tool', content: `Error: ${te.message}`, tool_call_id: call.id }); }
       }
       continue;
