@@ -194,7 +194,7 @@ async function chat(input, images = [], files = []) {
           }, 300000);
           const skillData = await res.json();
           lastFullResponse = skillData;
-          if (skillData.data?.tokens) { totalPromptTokens += skillData.data.tokens.prompt; totalResponseTokens += skillData.data.tokens.completion; broadcastConfig(); }
+          if (skillData.data?.tokens) { totalPromptTokens += (skillData.data.tokens.prompt || 0); totalResponseTokens += (skillData.data.tokens.completion || 0); broadcastConfig(); }
           if (skillData.data?.images) skillData.data.images.forEach(img => broadcast({ type: 'stream_image', data: img }));
           const resText = skillData.result ? skillData.message : `[ERROR] ${skillData.message}`;
           console.log(`\n${STYLES.dim}[Tool Result]: ${resText.substring(0, 200)}...${STYLES.reset}`);
@@ -222,13 +222,13 @@ async function processInput(line, source = 'terminal', images = [], files = []) 
   else if (input === '/context') { log(`History length: ${history.length}\nPrompt Tokens: ${totalPromptTokens}\nResponse Tokens: ${totalResponseTokens}`); }
   else if (input === '/system') { log(getSystemPrompt()); }
   else if (input === '/exe_system') {
-    try { const r = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/system_prompt`); const d = await r.json(); log(`Template:\n${d.template}\n\nEnv:\n${d.env_context}`); }
+    try { const r = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/system_prompt`, {}, 5000); const d = await r.json(); log(`Template:\n${d.template}\n\nEnv:\n${d.env_context}`); }
     catch(e) { log("Error: " + e.message); }
   }
   else if (input === '/skill_debug') {
     try {
-      const rList = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`); const dList = await rList.json();
-      const rMcp = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/mcp_tools`); const dMcp = await rMcp.json();
+      const rList = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`, {}, 5000); const dList = await rList.json();
+      const rMcp = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/mcp_tools`, {}, 5000); const dMcp = await rMcp.json();
       const mcpNames = [...dMcp.remote, ...dMcp.local].map(t => t.name);
       let out = "";
       dList.skills.forEach(s => {
@@ -241,11 +241,11 @@ async function processInput(line, source = 'terminal', images = [], files = []) 
   else if (input.startsWith('/list')) {
     try {
       if (input.includes('skills')) {
-        const r = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`); const d = await r.json();
+        const r = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`, {}, 5000); const d = await r.json();
         log(d.skills.map(s => `${s.name} [${s.enabled!==false?'ON':'OFF'}] - ${s.description}`).join('\n'));
       } else {
-        const r = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/mcp_tools`); const d = await r.json();
-        log(`Remote:\n` + d.remote.map(t=>`- ${t.name}`).join('\n') + `\nLocal:\n` + d.local.map(t=>`- ${t.name}`).join('\n'));
+        const r = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/mcp_tools`, {}, 5000); const d = await r.json();
+        log(`Remote Tools:\n` + d.remote.map(t=>`- ${t.name}`).join('\n') + `\nLocal Tools:\n` + d.local.map(t=>`- ${t.name}`).join('\n'));
       }
     } catch(e) { log("List failed."); }
   }
@@ -253,7 +253,7 @@ async function processInput(line, source = 'terminal', images = [], files = []) 
     const parts = input.split(' ');
     if (parts[1] === 'skill') {
       const name = parts[2], status = parts[3] === 'on';
-      await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/set_skill_status`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name, enabled: status }) });
+      await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/set_skill_status`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name, enabled: status }) }, 5000);
       log(`Skill ${name} set to ${parts[3]}`);
     } else if (parts[1] === 'cli_think' || parts[1] === 'exec_think') {
       const key = parts[1].toUpperCase(), status = parts[2] === 'on';
@@ -261,7 +261,25 @@ async function processInput(line, source = 'terminal', images = [], files = []) 
     }
   }
   else if (input === '/help') {
-    log("\n/clear, /reset, /reboot, /exit, /context, /system, /exe_system, /skill_debug, /list skills, /list mcp functions, /set skill <name> <on/off>, /set <cli_think|exec_think> <on/off>\n");
+    let help = `\n${STYLES.bold}=== CRISIS AGENT COMPREHENSIVE HELP ===${STYLES.reset}\n\n`;
+    help += `${STYLES.bold}[ Session ]${STYLES.reset}\n`;
+    help += `  /clear          - Clear screen\n`;
+    help += `  /reset          - Reset history & tokens\n`;
+    help += `  /reboot         - Reboot system\n`;
+    help += `  /exit           - Exit application\n\n`;
+    help += `${STYLES.bold}[ Debugging ]${STYLES.reset}\n`;
+    help += `  /context        - Show token usage & history\n`;
+    help += `  /system         - View CLI system prompt\n`;
+    help += `  /exe_system     - View Executor system prompt\n`;
+    help += `  /skill_debug    - Verify skill tool dependencies\n\n`;
+    help += `${STYLES.bold}[ Management ]${STYLES.reset}\n`;
+    help += `  /list skills             - List all skills\n`;
+    help += `  /list mcp functions      - List all atomic tools\n`;
+    help += `  /set skill <name> <on/off> - Toggle specific skill\n\n`;
+    help += `${STYLES.bold}[ Configuration ]${STYLES.reset}\n`;
+    help += `  /set cli_think <on/off>  - Toggle CLI CoT\n`;
+    help += `  /set exec_think <on/off> - Toggle Executor CoT\n`;
+    log(help);
   }
   else { if (source === 'terminal') broadcast({ role: 'user', content: input }); await chat(input, images, files); }
 }
