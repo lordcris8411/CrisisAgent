@@ -125,23 +125,26 @@ function getEnabledSkills() { return skills.filter(s => s.enabled !== false); }
 // ============================================================================
 async function runPlanner(instructionJSON, enabledSkills, files, images) {
   const skillSpecs = enabledSkills.map(s => `- ${s.name}: ${s.description}\n  [Tools]: ${s.use.join(', ')}`).join('\n');
-  const plannerPrompt = `Planner Center.\nTask: ${JSON.stringify(instructionJSON)}\nExperts:\n${skillSpecs}\nMust output JSON: {"expert": "...", "goal": "...", "plan": ["..."]}`;
+  const plannerPrompt = `Planner Center.\nTask: ${JSON.stringify(instructionJSON)}\nExperts:\n${skillSpecs}\nYou MUST return a valid JSON object. No other text.`;
   
-  relayLog(`\n[STAGE 1] Requesting Plan from LLM...`);
+  relayLog(`\n[STAGE 1] Requesting Plan (JSON Mode)...`);
   const formattedImages = images ? images.map(img => typeof img === 'string' ? img : img.data) : [];
   
   try {
     const response = await fetchWithTimeout(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages: [{ role: 'user', content: plannerPrompt, images: formattedImages }], think: false, stream: false, options: { temperature: 0 } })
-    }, 60000); // 60s timeout
+      body: JSON.stringify({ 
+        model: CONFIG.EXECUTOR_LLM.MODEL, 
+        messages: [{ role: 'user', content: plannerPrompt, images: formattedImages }], 
+        think: false, stream: false, 
+        format: 'json',
+        options: { temperature: 0 } 
+      })
+    }, 60000); 
     
     const data = await response.json();
-    let cleanText = data.message.content.trim().replace(/```json/i, '').replace(/```/g, '').trim();
-    const start = cleanText.indexOf('{'), end = cleanText.lastIndexOf('}');
-    if (start !== -1 && end !== -1) cleanText = cleanText.substring(start, end + 1);
-    const planJSON = JSON.parse(cleanText);
-    relayLog(`[Planner Decision] Expert: ${planJSON.expert}, Steps: ${planJSON.plan.length}`);
+    const planJSON = JSON.parse(data.message.content.trim());
+    relayLog(`[Planner Result]\n${JSON.stringify(planJSON, null, 2)}`);
     return planJSON;
   } catch (e) { 
     relayLog(`[STAGE 1 ERROR] ${e.message}`);
@@ -158,12 +161,12 @@ async function runExpertStep(skill, messages, authorizedTools, executionId, fina
   
   while (true) {
     currentExpertAbortController = new AbortController();
-    relayLog(`[Expert] Requesting LLM response (streaming)...`);
+    relayLog(`[Expert] Requesting LLM response...`);
     
     const response = await fetchWithTimeout(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
       method: 'POST', body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages, tools: authorizedTools, think: false, stream: true }),
       signal: currentExpertAbortController.signal
-    }, 120000); // 120s timeout for stream start
+    }, 120000);
     
     const reader = response.body.getReader(), decoder = new TextDecoder();
     let fullContent = "", toolCalls = [], buffer = '';
@@ -199,7 +202,7 @@ async function runExpertStep(skill, messages, authorizedTools, executionId, fina
             const toolRes = await fetchWithTimeout(`${CONFIG.RESOURCE_MCP_URL}/call`, { 
               method: 'POST', headers: { 'Content-Type': 'application/json' }, 
               body: JSON.stringify({ name: call.function.name, arguments: call.function.arguments, execution_id: executionId, clientHost: finalHost }) 
-            }, 30000); // 30s timeout for tool
+            }, 30000); 
             toolData = await toolRes.json();
           }
           const text = toolData.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
@@ -250,23 +253,26 @@ async function runExecuteLoop(planJSON, skill, instructionJSON, images, files, c
 }
 
 async function runReporter(instructionJSON, loopData) {
-  const reporterPrompt = `Original Task: ${JSON.stringify(instructionJSON)}\nHistory: ${JSON.stringify(loopData.results)}\nSummarize mission in Markdown. Return JSON: {"report": "..."}`;
-  relayLog(`\n[STAGE 3] Finalizing report...`);
+  const reporterPrompt = `Original Task: ${JSON.stringify(instructionJSON)}\nHistory: ${JSON.stringify(loopData.results)}\nYou MUST return a valid JSON object with a "report" field containing the summary in Markdown.`;
+  relayLog(`\n[STAGE 3] Requesting Report (JSON Mode)...`);
   try {
     const response = await fetchWithTimeout(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages: [{ role: 'user', content: reporterPrompt }], think: false, stream: false, options: { temperature: 0.2 } })
+      body: JSON.stringify({ 
+        model: CONFIG.EXECUTOR_LLM.MODEL, 
+        messages: [{ role: 'user', content: reporterPrompt }], 
+        think: false, stream: false, 
+        format: 'json',
+        options: { temperature: 0.2 } 
+      })
     }, 60000);
     const data = await response.json();
-    let cleanText = data.message.content.trim().replace(/```json/i, '').replace(/```/g, '').trim();
-    const start = cleanText.indexOf('{'), end = cleanText.lastIndexOf('}');
-    if (start !== -1 && end !== -1) cleanText = cleanText.substring(start, end + 1);
-    const finalReport = JSON.parse(cleanText);
-    relayLog(`[STAGE 3] Reporter Success.`);
+    const finalReport = JSON.parse(data.message.content.trim());
+    relayLog(`[Reporter Result]\n${JSON.stringify(finalReport, null, 2)}`);
     return finalReport;
   } catch (e) { 
     relayLog(`[STAGE 3 WARNING] Reporter failed: ${e.message}`);
-    return { report: "Mission Summary Unavailable (Error during reporting)." }; 
+    return { report: "Mission Summary Unavailable." }; 
   }
 }
 

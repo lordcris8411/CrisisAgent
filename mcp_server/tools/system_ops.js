@@ -317,19 +317,16 @@ async function handle(name, args)
         const raw = await screenshot({ format: 'png' });
         await sharp(raw).jpeg({ quality: 80 }).toFile(localPath);
         
-        // Construct download URL
-        // clientHost is passed as the 3rd argument to handle
+        // Construct simple URL (default handles both view and download)
         const host = arguments[2] || "localhost:3000";
-        const downloadUrl = `http://${host}/download?path=${encodeURIComponent(localPath)}`;
-        const previewUrl = `${downloadUrl}&view=1`;
+        const fileUrl = `http://${host}/download?path=${encodeURIComponent(localPath)}`;
 
         return { 
           content: [{ 
             type: "text", 
-            text: `Screenshot saved successfully.\nLocal Path: ${localPath}\nDownload URL: ${downloadUrl}\nPreview URL: ${previewUrl}` 
+            text: `Screenshot saved.\nPath: ${localPath}\nURL: ${fileUrl}` 
           }] 
-        };
-      }
+        };      }
       catch (e)
       {
         return { isError: true, content: [{ type: "text", text: `Screen capture failed: ${e.message}` }] };
