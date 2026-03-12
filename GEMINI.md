@@ -9,10 +9,11 @@ Crisis Agent is a hierarchical AI agent system that bridges high-level user inte
     - **Log Aggregator**: Collects and displays real-time logs from all system components.
     - **Attachment Host**: Handles complex file uploads (Base64 and binary streaming) and manages the `uploads/` directory.
     - **Web UI**: Hosts a WebSocket-enabled dashboard for remote access, real-time log streaming, and attachment management.
-- **Executor Server (`executor_server.js`)**: The "Dispatcher & Expert" layer.
-    - **Stage 1 (Dispatcher)**: Uses a lightweight LLM call to route natural language instructions to the most appropriate "Skill".
-    - **Stage 2 (Expert)**: Spawns a specialized LLM agent for the selected skill, granted access only to authorized tools.
-    - **Discovery Protocol**: Enforces tool safety by requiring experts to "unlock" tool schemas before execution.
+- **Executor Server (`executor_server.js`)**: The "Dispatcher & Execution" layer.
+    - **Stage 1 (Planner)**: Analyzes the task, selects the best "Skill", and generates a multi-step execution plan in JSON.
+    - **Stage 2 (Execute_Loop)**: Iteratively executes each step of the plan by spawning specialized LLM expert calls and managing tool orchestration.
+    - **Stage 3 (Reporter)**: Consolidates the execution trace into a final, comprehensive Markdown report for the user.
+    - **Discovery Protocol**: Enforces tool safety by requiring experts to "unlock" tool schemas via `get_tool_usage`.
 - **Resource MCP (`mcp_server/mcp_server.js`)**: The "Capabilities" layer.
     - A robust RESTful server exposing raw system tools (File I/O, Screen Capture, Desktop Automation).
     - **Protocol-Enforced Safety**: Implements a strict "Look Before You Leap" policy where tools are locked by default until a schema discovery call is made.
@@ -33,15 +34,17 @@ Crisis Agent is a hierarchical AI agent system that bridges high-level user inte
 
 ## Available Skills (Built-in)
 
-- **File Manager**: Comprehensive CRUD and manipulation of the local file system.
-- **App Launcher**: Application execution and automation.
-- **Downloader**: Remote resource retrieval and storage.
+- **Coder**: Senior engineer for writing, debugging, and explaining source code across languages.
+- **File Manager**: Comprehensive CRUD and management of the local file system.
+- **File Searcher**: Wildcard-based recursive system-wide file discovery.
+- **App Launcher**: Application execution and GUI automation.
+- **Downloader**: Web resource retrieval and file downloads.
 - **Env Analyst**: Environment context and system introspection.
 - **Hardware Analyst**: Performance monitoring and hardware diagnostics.
-- **Process Manager**: System process oversight and management.
-- **Screen Reader**: Visual capture and analysis of the host desktop.
-- **Time Teller**: Temporal awareness and scheduling.
-- **Visual Analyst**: Specialized image and visual data processing.
+- **Process Manager**: System process oversight and resource management.
+- **Screen Reader**: Visual capture and desktop analysis.
+- **Time Teller**: Temporal awareness and timezone-aware clock queries.
+- **Visual Analyst**: Specialized analysis of session-uploaded images.
 
 ## CLI Commands
 
