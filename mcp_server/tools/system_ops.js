@@ -322,10 +322,10 @@ async function handle(name, args)
         const fileUrl = `http://${host}/download?path=${encodeURIComponent(localPath)}`;
 
         return { 
-          content: [{ 
-            type: "text", 
-            text: `Screenshot saved.\nPath: ${localPath}\nURL: ${fileUrl}` 
-          }] 
+          content: [
+            { type: "text", text: `Screenshot saved to: ${localPath}` },
+            { type: "resource", metadata: { name: filename, path: localPath, url: fileUrl, category: 'image' } }
+          ] 
         };      }
       catch (e)
       {

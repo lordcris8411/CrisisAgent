@@ -176,6 +176,9 @@ async function chat(input, images = [], files = []) {
         }
       }
 
+      // 核心拦截：如果即将调用工具，则强制清空 LLM 的文本输出，防止废话。
+      if (toolCalls.length > 0) fullContent = "";
+
       const assistantMsg = { role: 'assistant', content: fullContent };
       if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls;
       history.push(assistantMsg);
@@ -187,6 +190,10 @@ async function chat(input, images = [], files = []) {
             result: true, message: (typeof rawTask === 'object') ? (rawTask.message || rawTask.instruction) : rawTask,
             attachment: files, data: { images: images.map(img => typeof img === 'string' ? img : img.data) } 
           };
+
+          // 记录 CLI 发给 Executor 的请求到 Web UI
+          broadcast({ type: 'console_log', content: `[CLI -> Executor] Request: ${JSON.stringify(taskObj, null, 2)}` });
+
           const res = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/call`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ arguments: { task: taskObj }, clientHost: EXTERNAL_HOST }),
@@ -194,7 +201,7 @@ async function chat(input, images = [], files = []) {
           }, 300000);
           const skillData = await res.json();
           lastFullResponse = skillData;
-          if (skillData.data?.tokens) { totalPromptTokens += (skillData.data.tokens.prompt || 0); totalResponseTokens += (skillData.data.tokens.completion || 0); broadcastConfig(); }
+          if (skillData.data?.tokens) { totalPromptTokens += skillData.data.tokens.prompt; totalResponseTokens += skillData.data.tokens.completion; broadcastConfig(); }
           if (skillData.data?.images) skillData.data.images.forEach(img => broadcast({ type: 'stream_image', data: img }));
           const resText = skillData.result ? skillData.message : `[ERROR] ${skillData.message}`;
           console.log(`\n${STYLES.dim}[Tool Result]: ${resText.substring(0, 200)}...${STYLES.reset}`);
@@ -210,11 +217,7 @@ async function chat(input, images = [], files = []) {
 
 async function processInput(line, source = 'terminal', images = [], files = []) {
   const input = line.trim(); if (!input && !images?.length && !files?.length) return;
-  const log = (msg) => { 
-    console.log(msg); 
-    if (source === 'web') broadcast({ type: 'cli_result', content: msg }); 
-  };
-
+  const log = (msg) => { console.log(msg); if (source === 'web') broadcast({ type: 'cli_result', content: msg }); };
   if (input === '/exit') process.exit(0);
   else if (input === '/clear') { console.clear(); broadcast({ type: 'clear' }); }
   else if (input === '/reset') { history = []; totalPromptTokens = 0; totalResponseTokens = 0; broadcast({ type: 'history', history: [] }); broadcastConfig(); log("Session Reset."); }
@@ -230,13 +233,9 @@ async function processInput(line, source = 'terminal', images = [], files = []) 
       const rList = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`, {}, 5000); const dList = await rList.json();
       const rMcp = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/mcp_tools`, {}, 5000); const dMcp = await rMcp.json();
       const mcpNames = [...dMcp.remote, ...dMcp.local].map(t => t.name);
-      let out = "";
-      dList.skills.forEach(s => {
-        const missing = s.use.filter(u => !mcpNames.includes(u));
-        out += `Skill [${s.name}]: ${missing.length > 0 ? "MISSING " + missing.join(', ') : "OK"}\n`;
-      });
+      let out = ""; dList.skills.forEach(s => { const missing = s.use.filter(u => !mcpNames.includes(u)); out += `Skill [${s.name}]: ${missing.length > 0 ? "MISSING " + missing.join(', ') : "OK"}\n`; });
       log(out);
-    } catch(e) { log("Debug failed: " + e.message); }
+    } catch(e) { log("Debug failed."); }
   }
   else if (input.startsWith('/list')) {
     try {
@@ -261,24 +260,7 @@ async function processInput(line, source = 'terminal', images = [], files = []) 
     }
   }
   else if (input === '/help') {
-    let help = `\n${STYLES.bold}=== CRISIS AGENT COMPREHENSIVE HELP ===${STYLES.reset}\n\n`;
-    help += `${STYLES.bold}[ Session ]${STYLES.reset}\n`;
-    help += `  /clear          - Clear screen\n`;
-    help += `  /reset          - Reset history & tokens\n`;
-    help += `  /reboot         - Reboot system\n`;
-    help += `  /exit           - Exit application\n\n`;
-    help += `${STYLES.bold}[ Debugging ]${STYLES.reset}\n`;
-    help += `  /context        - Show token usage & history\n`;
-    help += `  /system         - View CLI system prompt\n`;
-    help += `  /exe_system     - View Executor system prompt\n`;
-    help += `  /skill_debug    - Verify skill tool dependencies\n\n`;
-    help += `${STYLES.bold}[ Management ]${STYLES.reset}\n`;
-    help += `  /list skills             - List all skills\n`;
-    help += `  /list mcp functions      - List all atomic tools\n`;
-    help += `  /set skill <name> <on/off> - Toggle specific skill\n\n`;
-    help += `${STYLES.bold}[ Configuration ]${STYLES.reset}\n`;
-    help += `  /set cli_think <on/off>  - Toggle CLI CoT\n`;
-    help += `  /set exec_think <on/off> - Toggle Executor CoT\n`;
+    let help = `\n${STYLES.bold}=== HELP ===${STYLES.reset}\n/clear, /reset, /reboot, /exit, /context, /system, /exe_system, /skill_debug, /list skills, /list mcp functions, /set skill <name> <on/off>, /set <cli_think|exec_think> <on/off>\n`;
     log(help);
   }
   else { if (source === 'terminal') broadcast({ role: 'user', content: input }); await chat(input, images, files); }
