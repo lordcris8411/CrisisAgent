@@ -11,7 +11,6 @@ app.use(express.json({ limit: '100mb' }));
 
 const STYLES = { reset: '\x1b[0m', green: '\x1b[32m', cyan: '\x1b[36m', bold: '\x1b[1m', dim: '\x1b[2m', red: '\x1b[31m', yellow: '\x1b[33m' };
 
-// 将日志同步发送给 CLI 的 Web 服务
 function relayLog(content, type = 'console_log') {
   const cleanText = content.replace(/\x1b\[[0-9;]*m/g, '');
   const controller = new AbortController();
@@ -217,13 +216,13 @@ function getEnabledSkills() { return skills.filter(s => s.enabled !== false); }
 // ============================================================================
 // STAGE 1: PLANNER
 // ============================================================================
-async function runPlanner(instruction, enabledSkills, files, images) {
+async function runPlanner(instructionJSON, enabledSkills, files, images) {
   let contextHint = "";
   if (files && files.length > 0) contextHint += `\n[Context: ${files.length} file(s) attached to session]`;
   if (images && images.length > 0) contextHint += `\n[Context: ${images.length} image(s) attached to session]`;
 
   const skillSpecs = enabledSkills.map(s => `- ${s.name}: ${s.description}`).join('\n');
-  const plannerPrompt = `Task: "${instruction}"${contextHint}\n\n作为 Planner (规划者)，你必须强制执行【链式思维】。请根据任务目标，从以下列表中选择最合适的专家技能 (Expert)，并将任务拆解为具体的执行步骤 (Plan)。\n\n可用技能:\n${skillSpecs}\n\n你必须且只能返回一个合法的 JSON 对象，不要包含任何 markdown 代码块标记，结构如下：\n{\n  "expert": "<skill_name 或者是 NONE>",\n  "goal": "<总体目标的简短描述>",\n  "plan": [\n    "<第一步要执行的操作>",\n    "<第二步要执行的操作>"\n  ]\n}`;
+  const plannerPrompt = `Task JSON: ${JSON.stringify(instructionJSON)}${contextHint}\n\n作为 Planner (规划者)，你必须强制执行【链式思维】。请根据任务目标，从以下列表中选择最合适的专家技能 (Expert)，并将任务拆解为具体的执行步骤 (Plan)。\n\n可用技能:\n${skillSpecs}\n\n你必须且只能返回一个合法的 JSON 对象，不要包含任何 markdown 代码块标记，结构如下：\n{\n  "expert": "<skill_name 或者是 NONE>",\n  "goal": "<总体目标的简短描述>",\n  "plan": [\n    "<第一步要执行的操作>",\n    "<第二步要执行的操作>"\n  ]\n}`;
 
   const formattedImages = images ? images.map(img => typeof img === 'string' ? img : img.data) : [];
 
@@ -246,9 +245,7 @@ async function runPlanner(instruction, enabledSkills, files, images) {
      let cleanText = rawText.replace(/```json/i, '').replace(/```/g, '').trim();
      const start = cleanText.indexOf('{');
      const end = cleanText.lastIndexOf('}');
-     if (start !== -1 && end !== -1) {
-         cleanText = cleanText.substring(start, end + 1);
-     }
+     if (start !== -1 && end !== -1) cleanText = cleanText.substring(start, end + 1);
      return JSON.parse(cleanText);
   } catch (e) {
      console.error("Planner parsing failed:", rawText);
@@ -257,7 +254,7 @@ async function runPlanner(instruction, enabledSkills, files, images) {
 }
 
 // ============================================================================
-// STAGE 2: EXECUTE LOOP (and runExpertStep)
+// STAGE 2: EXECUTE LOOP
 // ============================================================================
 async function runExpertStep(skill, messages, authorizedTools, executionId, finalHost, sessionImages, sessionFiles) {
   const currentConfig = JSON.parse(fs.readFileSync('config.json', 'utf8'));
@@ -307,19 +304,9 @@ async function runExpertStep(skill, messages, authorizedTools, executionId, fina
           try {
             const data = JSON.parse(line);
             const message = data.message;
-
-            if (message?.thinking) {
-              if (currentConfig.EXECUTOR_THINK) relayLog(message.thinking, 'thinking_chunk');
-              continue;
-            }
-
-            if (message?.content) {
-              relayLog(message.content, 'console_log_stream');
-              fullContent += message.content;
-            }
-
+            if (message?.thinking && currentConfig.EXECUTOR_THINK) relayLog(message.thinking, 'thinking_chunk');
+            if (message?.content) { relayLog(message.content, 'console_log_stream'); fullContent += message.content; }
             if (data.message?.tool_calls) toolCalls = toolCalls.concat(data.message.tool_calls);
-
             if (data.done) {
               if (data.prompt_eval_count) promptTokens += data.prompt_eval_count;
               if (data.eval_count) completionTokens += data.eval_count;
@@ -339,7 +326,6 @@ async function runExpertStep(skill, messages, authorizedTools, executionId, fina
     if (toolCalls.length > 0) {
       for (const call of toolCalls) {
         if (call.function.name === 'get_tool_usage') call.function.arguments.execution_id = executionId;
-
         const argsString = JSON.stringify(call.function.arguments);
         const toolLog = `[Execute_Loop -> Expert] Tool Call: ${call.function.name} (${argsString})`;
         console.log(`${STYLES.dim}${toolLog}${STYLES.reset}`);
@@ -349,66 +335,47 @@ async function runExpertStep(skill, messages, authorizedTools, executionId, fina
         const localTool = localTools.find(t => t.name === call.function.name);
         if (localTool) toolData = await localTool.handler(call.function.arguments, sessionImages, sessionFiles);
         else {
-          console.log(`${STYLES.cyan}[Executor -> MCP] Calling '${call.function.name}' (Execution ID: ${executionId})${STYLES.reset}`);
           const toolRes = await fetch(`${CONFIG.RESOURCE_MCP_URL}/call`, { 
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify({ 
-              name: call.function.name, 
-              arguments: call.function.arguments,
-              execution_id: executionId,
-              clientHost: finalHost
-            }) 
+            body: JSON.stringify({ name: call.function.name, arguments: call.function.arguments, execution_id: executionId, clientHost: finalHost }) 
           });
           toolData = await toolRes.json();
         }
 
         const text = toolData.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
         const capturedImagesFromTool = toolData.content.filter(c => c.type === 'image').map(c => c.data);
-
         const resultPreview = text.length > 500 ? text.substring(0, 500) + "..." : text;
         const resultLog = `[Tool Result] ${call.function.name}: ${resultPreview}${capturedImagesFromTool.length > 0 ? ` (+${capturedImagesFromTool.length} images)` : ''}`;
         console.log(`${STYLES.dim}${resultLog}${STYLES.reset}`);
         relayLog(resultLog);
 
         if (capturedImagesFromTool && capturedImagesFromTool.length > 0) capturedImages = capturedImages.concat(capturedImagesFromTool);
-        
         messages.push({ role: 'tool', content: text, tool_call_id: call.id });
-        
         if (capturedImagesFromTool && capturedImagesFromTool.length > 0) {
           messages.push({ role: 'user', content: "Attached captured visuals.", images: capturedImagesFromTool });
         }
       }
       continue;
     }
-
     stepFinalContent = fullContent;
     break;
   }
-
   return { messages, content: stepFinalContent, promptTokens, completionTokens, capturedImages };
 }
 
-async function runExecuteLoop(planJSON, skill, instruction, images, files, clientHost, currentId) {
+async function runExecuteLoop(planJSON, skill, instructionJSON, images, files, clientHost, currentId) {
   const allAvailableTools = [...resourceTools, ...localTools];
   const finalHost = clientHost || "localhost:3000";
-  
   const authorizedNames = [...skill.use, "get_tool_usage"];
   const authorizedToolsRaw = allAvailableTools.filter(t => authorizedNames.includes(t.name));
   
   const authorizedTools = authorizedToolsRaw.map(t => {
-    if (t.name === "get_tool_usage") {
-      return { type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } };
-    } else {
-      return { 
-        type: 'function', 
-        function: { 
-          name: t.name, 
-          description: `${t.description} (SCHEMA HIDDEN: Call 'get_tool_usage' to unlock parameters)`, 
-          parameters: { type: "object", properties: {}, additionalProperties: true } 
-        } 
-      };
-    }
+    if (t.name === "get_tool_usage") return { type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } };
+    return { 
+      type: 'function', 
+      function: { name: t.name, description: `${t.description} (SCHEMA HIDDEN: Call 'get_tool_usage' to unlock parameters)`, parameters: { type: "object", properties: {}, additionalProperties: true } } 
+    };
   });
 
   let expertSystemPrompt = "";
@@ -422,23 +389,12 @@ async function runExecuteLoop(planJSON, skill, instruction, images, files, clien
     expertSystemPrompt = `${skill.system}\n\n### CURRENT SYSTEM ENVIRONMENT CONTEXT\n${cachedEnvInfo}`;
   }
 
-  if (images && images.length > 0) {
-    const imageList = images.map((img, i) => `Index ${i}: ${img.name || 'unnamed'}`).join(', ');
-    expertSystemPrompt += `\n\n[ATTACHMENT ALERT: VISION READY] ${images.length} image(s) have been loaded into your visual context: ${imageList}.`;
-  }  
-  if (files && files.length > 0) {
-    const fileList = files.map(f => f.name).join(', ');
-    expertSystemPrompt += `\n\n[ATTACHMENT ALERT: SESSION FILES] The following files are available for this session: ${fileList}.`;
-  }
-
   let messages = [
     { role: 'system', content: expertSystemPrompt },
-    { role: 'user', content: `总体任务: ${instruction}\n现在我们将开始按计划逐条执行。` }
+    { role: 'user', content: `总体任务 JSON: ${JSON.stringify(instructionJSON)}\n现在我们将开始按计划逐条执行。` }
   ];
 
-  if (images && images.length > 0) {
-    messages[1].images = images.map(img => typeof img === 'string' ? img : img.data);
-  }
+  if (images && images.length > 0) messages[1].images = images.map(img => typeof img === 'string' ? img : img.data);
 
   let executionResults = [];
   let totalPrompt = 0;
@@ -450,15 +406,12 @@ async function runExecuteLoop(planJSON, skill, instruction, images, files, clien
     const stepLog = `\n[Execute_Loop] Processing Step ${i+1}/${planJSON.plan.length}: ${step}`;
     console.log(`${STYLES.cyan}${stepLog}${STYLES.reset}`);
     relayLog(stepLog);
-
     messages.push({ role: 'user', content: `[Execute_Loop] 请执行计划的第 ${i+1} 步: ${step}` });
-    
     const stepRes = await runExpertStep(skill, messages, authorizedTools, currentId, finalHost, images, files);
     messages = stepRes.messages;
     totalPrompt += stepRes.promptTokens;
     totalCompletion += stepRes.completionTokens;
     allCapturedImages = allCapturedImages.concat(stepRes.capturedImages);
-    
     executionResults.push({ step: step, output: stepRes.content });
   }
 
@@ -468,100 +421,76 @@ async function runExecuteLoop(planJSON, skill, instruction, images, files, clien
 // ============================================================================
 // STAGE 3: REPORTER
 // ============================================================================
-async function runReporter(instruction, loopData) {
-  const reporterPrompt = `原始任务: "${instruction}"\n\n【Execute_Loop 执行结果 (JSON)】\n${JSON.stringify(loopData.results, null, 2)}\n\n作为 Reporter (汇报者)，你的任务是综合这些步骤的执行结果，向用户汇报最终总结。你必须且只能返回一个合法的 JSON 对象，不要包含 markdown 代码块标记，结构如下：\n{\n  "report": "<向用户汇报的最终 Markdown 格式文本总结>"\n}`;
+async function runReporter(instructionJSON, loopData) {
+  const reporterPrompt = `原始任务 JSON: ${JSON.stringify(instructionJSON)}\n\n【Execute_Loop 执行结果 (JSON)】\n${JSON.stringify(loopData.results, null, 2)}\n\n作为 Reporter (汇报者)，你的任务是综合这些步骤的执行结果，向用户汇报最终总结。你必须且只能返回一个合法的 JSON 对象，不要包含 markdown 代码块标记，结构如下：\n{\n  "report": "<向用户汇报的最终 Markdown 格式文本总结>"\n}`;
 
   const response = await fetch(`${CONFIG.EXECUTOR_LLM.HOST}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      model: CONFIG.EXECUTOR_LLM.MODEL, 
-      messages: [{ role: 'user', content: reporterPrompt }], 
-      think: false, 
-      stream: false,
-      options: { temperature: 0.3 }
-    })
+    body: JSON.stringify({ model: CONFIG.EXECUTOR_LLM.MODEL, messages: [{ role: 'user', content: reporterPrompt }], think: false, stream: false, options: { temperature: 0.3 } })
   });
 
   const data = await response.json();
   const rawText = data.message.content.trim();
   
-  let reportText = "Reporter failed to generate summary.";
   try {
      let cleanText = rawText.replace(/```json/i, '').replace(/```/g, '').trim();
      const start = cleanText.indexOf('{');
      const end = cleanText.lastIndexOf('}');
-     if (start !== -1 && end !== -1) {
-         cleanText = cleanText.substring(start, end + 1);
-     }
-     const parsed = JSON.parse(cleanText);
-     reportText = parsed.report || rawText;
+     if (start !== -1 && end !== -1) cleanText = cleanText.substring(start, end + 1);
+     return JSON.parse(cleanText);
   } catch (e) {
-     reportText = rawText;
+     return { report: rawText };
   }
-  
-  relayLog(`\n[Reporter Output]\n${reportText}`);
-  return reportText;
 }
 
 // ============================================================================
 // MAIN ROUTES
 // ============================================================================
-app.post("/call", async (req, res) => 
-{
+app.post("/call", async (req, res) => {
   executionCounter++;
   const currentId = executionCounter;
-  const { name, arguments: args, skill_name, images, files, clientHost } = req.body;
+  const { arguments: args, skill_name, images, files, clientHost } = req.body;
   
-  if (files && files.length > 0) relayLog(`[DEBUG] /call received ${files.length} files`);
+  // 核心：处理 JSON 格式的指令
+  let instructionJSON = args?.task;
+  if (typeof instructionJSON === 'string') {
+    try { instructionJSON = JSON.parse(instructionJSON); } catch (e) { instructionJSON = { instruction: instructionJSON }; }
+  }
 
-  const instruction = args?.task || `Perform ${skill_name}`;
-  const delegateLog = `[DELEGATE] Task: ${instruction} (Execution ID: ${currentId})`;
+  const delegateLog = `[DELEGATE] Task: ${instructionJSON.instruction || JSON.stringify(instructionJSON)} (ID: ${currentId})`;
   console.log(`${STYLES.bold}${delegateLog}${STYLES.reset}`);
   relayLog(delegateLog);
   
   const enabledSkills = getEnabledSkills();
 
   try {
-    let totalPrompt = 0;
-    let totalCompletion = 0;
-
-    // --- STAGE 1: PLANNER ---
-    relayLog(`[STAGE 1] Planner is analyzing the task...`);
     let planJSON;
-
     if (skill_name) {
-      planJSON = { expert: skill_name, goal: instruction, plan: [`Execute requested task: ${instruction}`] };
+      planJSON = { expert: skill_name, goal: instructionJSON.instruction || skill_name, plan: [`Execute requested task`] };
     } else {
-      planJSON = await runPlanner(instruction, enabledSkills, files, images);
-      relayLog(`[Planner Decision] Expert: ${planJSON.expert}\n[Plan Steps]\n${planJSON.plan.map((p,i)=>`${i+1}. ${p}`).join('\n')}`);
+      planJSON = await runPlanner(instructionJSON, enabledSkills, files, images);
+      relayLog(`[Planner] Expert: ${planJSON.expert}\n[Plan]\n${planJSON.plan.map((p,i)=>`${i+1}. ${p}`).join('\n')}`);
     }
 
     if (!planJSON.expert || planJSON.expert.toUpperCase() === "NONE" || !enabledSkills.find(s => s.name === planJSON.expert)) {
-      return res.json({ content: [{ type: "text", text: `No suitable skill found. Planner output: ${JSON.stringify(planJSON)}` }], tokens: { prompt: totalPrompt, completion: totalCompletion } });
+      return res.json({ status: "error", message: "No suitable skill found", planner_output: planJSON });
     }
 
     const bestSkill = enabledSkills.find(s => s.name === planJSON.expert);
-
-    // --- STAGE 2: EXECUTE LOOP ---
-    relayLog(`\n[STAGE 2] Execute_Loop starting with expert: ${bestSkill.name}`);
-    const loopData = await runExecuteLoop(planJSON, bestSkill, instruction, images, files, clientHost, currentId);
-    totalPrompt += loopData.tokens.prompt;
-    totalCompletion += loopData.tokens.completion;
-
-    // --- STAGE 3: REPORTER ---
-    relayLog(`\n[STAGE 3] Reporter is compiling the final summary...`);
-    const finalReportText = await runReporter(instruction, loopData);
+    const loopData = await runExecuteLoop(planJSON, bestSkill, instructionJSON, images, files, clientHost, currentId);
+    const finalReport = await runReporter(instructionJSON, loopData);
 
     res.json({ 
-      content: [{ type: "text", text: finalReportText }], 
-      tokens: { prompt: totalPrompt, completion: totalCompletion }, 
+      status: "success",
+      report: finalReport.report, 
+      tokens: { prompt: loopData.tokens.prompt, completion: loopData.tokens.completion }, 
       images: loopData.images || [] 
     });
   } catch (e) {
     console.error(`[ERROR] ${e.message}`);
     relayLog(`Error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ status: "error", message: e.message });
   }
 });
 
@@ -569,10 +498,20 @@ app.get("/list", (req, res) => {
   res.json({ 
     tools: [{ 
       name: "delegate_task", 
-      description: "Mandatory tool for all system-level operations. Use this to search files, read/write data, manage processes, analyze screens, or check system status. If the user asks 'where is...', 'find...', 'how much memory...', or mentions any file/system action, you MUST use this tool.", 
+      description: "Mandatory tool for all system-level operations. Use this for file search, I/O, process management, vision, or hardware/env info.", 
       inputSchema: { 
         type: "object", 
-        properties: { task: { type: "string", description: "The specific instruction for the executor expert." } }, 
+        properties: { 
+          task: { 
+            type: "object", 
+            description: "Structured instruction object.",
+            properties: {
+              instruction: { type: "string", description: "The core command." },
+              context: { type: "string", description: "Optional context." }
+            },
+            required: ["instruction"]
+          } 
+        }, 
         required: ["task"] 
       } 
     }] 
@@ -581,7 +520,6 @@ app.get("/list", (req, res) => {
 
 app.get("/skills", (req, res) => res.json({ skills }));
 app.get("/mcp_tools", (req, res) => res.json({ remote: resourceTools, local: localTools }));
-
 app.post("/set_skill_status", (req, res) => {
   const { name, enabled } = req.body;
   const filePath = path.join(__dirname, 'functions', `${name}.func`);
@@ -589,44 +527,15 @@ app.post("/set_skill_status", (req, res) => {
   content.enabled = enabled;
   fs.writeFileSync(filePath, JSON.stringify(content, null, 2), 'utf8');
   loadSkills();
-  res.json({ message: "OK" });
-});
-
-app.get("/capabilities", (req, res) => { 
-  const summary = skills.filter(s => s.enabled !== false).map(s => `- ${s.description}`).join('\n');
-  res.json({ summary: `The Executor is capable of performing the following types of tasks:\n${summary}\n\nGeneral Domains: File System (CRUD/Search), Desktop Vision, Hardware & Environment Monitoring, Process Management, and Code Engineering.` }); 
-});
-
-app.get("/system_prompt", (req, res) => {
-  try {
-    const template = fs.readFileSync('exe_system.md', 'utf8');
-    res.json({ template, env_context: cachedEnvInfo });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/reboot", (req, res) => { res.json({ message: "OK" }); setTimeout(() => process.exit(99), 100); });
-
-app.post("/interrupt", (req, res) => {
-  if (currentExpertAbortController) {
-    currentExpertAbortController.abort();
-    currentExpertAbortController = null;
-    console.log(`${STYLES.yellow}[Executor] Expert inference interrupted by command.${STYLES.reset}`);
-    return res.json({ message: "Interrupted" });
-  }
-  res.json({ message: "No active inference" });
+  res.json({ status: "success" });
 });
 
 async function start() {
   loadSkills();
   await syncResourceTools();
   await fetchInitialEnvInfo();
-  const msg = `Executor ready on ${CONFIG.EXECUTOR_PORT}`;
   app.listen(CONFIG.EXECUTOR_PORT, "0.0.0.0", () => {
-    console.log(msg);
-    relayLog(msg);
+    console.log(`Executor ready on ${CONFIG.EXECUTOR_PORT}`);
   });
 }
-
 start();

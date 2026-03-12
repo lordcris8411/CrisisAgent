@@ -412,14 +412,14 @@ async function chat(input, images = [], files = [], imageNames = []) {
 
               if (msg?.thinking) {
                 if (!hasPrintedPrompt) { process.stdout.write(`\n${STYLES.bgCyan}${STYLES.white}${STYLES.bold} CrisisAgent ${STYLES.reset} `); hasPrintedPrompt = true; }
-                if (!isThinking) { process.stdout.write(`\n${STYLES.dim}[Thinking]\n `); isThinking = true; }
+                if (!isThinking) { process.stdout.write(`\n${STYLES.dim}[思考中]\n `); isThinking = true; }
                 process.stdout.write(msg.thinking);
                 broadcast({ type: 'thinking_chunk', content: msg.thinking });
               }
 
               if (msg?.content) {
                 if (!hasPrintedPrompt) { process.stdout.write(`\n${STYLES.bgCyan}${STYLES.white}${STYLES.bold} CrisisAgent ${STYLES.reset} `); hasPrintedPrompt = true; }
-                if (isThinking) { process.stdout.write(`${STYLES.reset}\n\n[Answer]\n`); isThinking = false; }
+                if (isThinking) { process.stdout.write(`${STYLES.reset}\n\n[结果]\n`); isThinking = false; }
                 process.stdout.write(msg.content);
                 broadcast({ type: 'stream_chunk', content: msg.content });
                 fullContent += msg.content;
@@ -610,7 +610,8 @@ async function processInput(line, source = 'terminal', images = [], files = [], 
       `  /exit           - 退出 Crisis Agent\n\n` +
       `${STYLES.bold}[ 调试与监控 (Debugging) ]${STYLES.reset}\n` +
       `  /context        - 显示当前对话的上下文历史及 Token 消耗详情\n` +
-      `  /system         - 查看当前的系统提示词 (System Prompt) 及其 Token 成本\n` +
+      `  /system         - 查看 CLI 层级的系统提示词 (System Prompt)\n` +
+      `  /exe_system     - 查看 Executor 层级的专家提示词模板与环境上下文\n` +
       `  /skill_debug    - 诊断 Skill 状态，检查依赖的 MCP 原子功能是否缺失\n\n` +
       `${STYLES.bold}[ 系统与 Skill 管理 (System & Skills) ]${STYLES.reset}\n` +
       `  /list skills             - 列出所有可用 Skill 及其开启/关闭状态\n` +
