@@ -12,7 +12,7 @@ app.use(express.json({ limit: '100mb' }));
 const STYLES = { reset: '\x1b[0m', green: '\x1b[32m', cyan: '\x1b[36m', bold: '\x1b[1m', dim: '\x1b[2m', red: '\x1b[31m', yellow: '\x1b[33m' };
 
 // ============================================================================
-// UTILITIES
+// UTILITIES & STATE
 // ============================================================================
 function safeParseJSON(raw) {
   if (!raw) return null;
@@ -27,10 +27,7 @@ function safeParseJSON(raw) {
 
 async function fetchWithTimeout(url, options = {}, timeout = 60000) {
   const controller = new AbortController();
-  const id = setTimeout(() => {
-    console.log(`${STYLES.red}[TIMEOUT] ${url}${STYLES.reset}`);
-    controller.abort();
-  }, timeout);
+  const id = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await fetch(url, { ...options, signal: controller.signal });
     clearTimeout(id); return response;
@@ -51,11 +48,55 @@ function relayLog(content, type = 'console_log') {
 
 let skills = [], resourceTools = [], currentExpertAbortController = null, cachedEnvInfo = "System context not loaded.", executionCounter = 0;
 
+const localTools = [
+  { 
+    name: "read_local_file", description: "Read local mcp_server file.", 
+    inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] }, 
+    handler: async (args) => ({ content: [{ type: "text", text: fs.readFileSync(path.resolve(__dirname, 'mcp_server', args.path), 'utf8') }] }) 
+  },
+  { 
+    name: "write_local_file", description: "Write local file.", 
+    inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] }, 
+    handler: async (args) => { 
+      const fullPath = path.resolve(args.path); fs.mkdirSync(path.dirname(fullPath), { recursive: true }); 
+      let data = args.content; if (data.startsWith('BASE64_DATA:')) data = Buffer.from(data.replace('BASE64_DATA:', ''), 'base64'); 
+      fs.writeFileSync(fullPath, data); return { content: [{ type: "text", text: `Saved to ${fullPath}` }] }; 
+    } 
+  },
+  { 
+    name: "save_uploaded_image", description: "Save uploaded image.", 
+    inputSchema: { type: "object", properties: { image_index: { type: "integer" }, local_path: { type: "string" } } }, 
+    handler: async (args, sessionImages) => { 
+      try { 
+        let idx = args.image_index; if (idx === undefined && sessionImages?.length === 1) idx = 0; 
+        if (!sessionImages?.[idx]) throw new Error("Image not found"); 
+        const imgObj = sessionImages[idx]; const base64Data = typeof imgObj === 'string' ? imgObj : imgObj.data; 
+        const targetPath = path.resolve(args.local_path || `uploads/image_${Date.now()}.jpg`); 
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true }); fs.writeFileSync(targetPath, Buffer.from(base64Data, 'base64')); 
+        return { content: [{ type: "text", text: `SUCCESS: Saved to ${targetPath}` }] }; 
+      } catch (e) { return { isError: true, content: [{ type: "text", text: e.message }] }; } 
+    } 
+  },
+  { 
+    name: "get_tool_usage", description: "Get tool schema.", 
+    inputSchema: { type: "object", properties: { tool_name: { type: "string" }, execution_id: { type: "integer" } }, required: ["tool_name"] }, 
+    handler: async (args) => { 
+      const localTarget = localTools.find(t => t.name === args.tool_name); 
+      if (localTarget) return { content: [{ type: "text", text: JSON.stringify(localTarget.inputSchema) }] }; 
+      const toolRes = await fetchWithTimeout(`${CONFIG.RESOURCE_MCP_URL}/call`, { 
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ name: 'get_tool_usage', arguments: { tool_name: args.tool_name }, execution_id: args.execution_id }) 
+      }, 10000); return await toolRes.json(); 
+    } 
+  }
+];
+
 function getEnabledSkills() { return skills.filter(s => s.enabled !== false); }
 
 // ============================================================================
-// STAGE 1: PLANNER
+// CORE STAGES
 // ============================================================================
+
 async function runPlanner(instruction, enabledSkills, files, images) {
   const skillSpecs = enabledSkills.map(s => `- Expert: "${s.name}"\n  Tools: [${s.use.join(', ')}]\n  Capabilities: ${s.description}`).join('\n');
   const plannerPrompt = `### MISSION PLANNER PROTOCOL
@@ -88,9 +129,6 @@ ${skillSpecs}
   } catch (e) { relayLog({ "[PLANNER FATAL]": e.message }); throw e; }
 }
 
-// ============================================================================
-// STAGE 2: LOOPER
-// ============================================================================
 async function runExpertStep(skill, messages, authorizedTools, executionId, finalHost, sessionImages, sessionFiles) {
   const currentConfig = JSON.parse(fs.readFileSync('config.json', 'utf8'));
   let promptTokens = 0, completionTokens = 0, capturedImages = [], stepFinalContent = "", resources = [];
@@ -174,9 +212,6 @@ async function runExecuteLoop(planJSON, enabledSkills, instruction, images, file
   return { results, tokens: { prompt: totalP, completion: totalC }, images: allImgs, resources: allRes };
 }
 
-// ============================================================================
-// STAGE 3: REPORTER
-// ============================================================================
 async function runReporter(instruction, loopData) {
   const reporterPrompt = `Synthesize results into Markdown report. Task: "${instruction}"\nTrace: ${JSON.stringify(loopData.results)}\nReturn JSON: {"result": true, "message": "Markdown text", "attachment": []}`;
   relayLog("\n[STAGE 3] COMPILING REPORT...");
@@ -190,11 +225,11 @@ async function runReporter(instruction, loopData) {
     const report = { result: !!parsed, message: parsed ? parsed.message : data.message.content, attachment: (parsed && parsed.attachment) ? parsed.attachment : loopData.resources };
     relayLog({ "[Reporter Result]": report });
     return report;
-  } catch (e) { return { result: false, message: "Report generation failed.", attachment: loopData.resources }; }
+  } catch (e) { return { result: false, message: "Report failed.", attachment: loopData.resources }; }
 }
 
 // ============================================================================
-// ROUTES & START
+// ROUTES
 // ============================================================================
 app.post("/call", async (req, res) => {
   executionCounter++; const currentId = executionCounter;
