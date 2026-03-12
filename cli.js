@@ -67,12 +67,12 @@ app.get('/download', async (req, res) => {
 });
 
 app.get('/api/skills', async (req, res) => {
-  try { const r = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`); res.json(await r.json()); } catch (e) { res.status(500).json({ error: e.message }); }
+  try { const r = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`, {}, 5000); res.json(await r.json()); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/set_skill', async (req, res) => {
   try {
-    await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/set_skill_status`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(req.body) });
-    const rCap = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/capabilities`);
+    await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/set_skill_status`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(req.body) }, 5000);
+    const rCap = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/capabilities`, {}, 5000);
     capabilitiesSummary = (await rCap.json()).summary;
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -210,7 +210,10 @@ async function chat(input, images = [], files = []) {
 
 async function processInput(line, source = 'terminal', images = [], files = []) {
   const input = line.trim(); if (!input && !images?.length && !files?.length) return;
-  const log = (msg) => { console.log(msg); if (source === 'web') broadcast({ type: 'console_log', content: msg }); };
+  const log = (msg) => { 
+    console.log(msg); 
+    if (source === 'web') broadcast({ type: 'cli_result', content: msg }); 
+  };
 
   if (input === '/exit') process.exit(0);
   else if (input === '/clear') { console.clear(); broadcast({ type: 'clear' }); }
@@ -227,10 +230,12 @@ async function processInput(line, source = 'terminal', images = [], files = []) 
       const rList = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`); const dList = await rList.json();
       const rMcp = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/mcp_tools`); const dMcp = await rMcp.json();
       const mcpNames = [...dMcp.remote, ...dMcp.local].map(t => t.name);
+      let out = "";
       dList.skills.forEach(s => {
         const missing = s.use.filter(u => !mcpNames.includes(u));
-        log(`Skill [${s.name}]: ${missing.length > 0 ? "MISSING " + missing.join(', ') : "OK"}`);
+        out += `Skill [${s.name}]: ${missing.length > 0 ? "MISSING " + missing.join(', ') : "OK"}\n`;
       });
+      log(out);
     } catch(e) { log("Debug failed: " + e.message); }
   }
   else if (input.startsWith('/list')) {

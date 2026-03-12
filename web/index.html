@@ -1166,8 +1166,9 @@
                         document.getElementById('response-tokens').innerText = data.tokens.response || 0;
                     }
                 }
-                else if (data.type === 'console_log' || data.type === 'console_log_stream' || data.type === 'console_notify') {
+                else if (data.type === 'console_log' || data.type === 'console_log_stream' || data.type === 'console_notify' || data.type === 'cli_result') {
                     const isNotify = data.type === 'console_notify';
+                    const isCliResult = data.type === 'cli_result';
                     const cleanText = data.content.replace(/\x1b\[[0-9;]*m/g, '');
                     if (!cleanText.trim()) return;
 
@@ -1176,8 +1177,31 @@
                         return escaped.replace(/(\[(Tool Result|系统通知)\].*)/g, '<strong style="color:var(--accent-main);filter:brightness(1.2);">$1</strong>');
                     };
 
+                    // 处理 CLI 命令结果 - 简洁、无计时、无 loading
+                    if (isCliResult) {
+                        const container = document.createElement('div');
+                        container.className = 'message-container';
+                        const wrapper = document.createElement('div');
+                        wrapper.className = 'log-wrapper';
+                        wrapper.style.borderColor = 'rgba(100, 116, 139, 0.5)';
+                        wrapper.style.background = 'rgba(100, 116, 139, 0.05)';
+                        const header = document.createElement('div');
+                        header.className = 'log-header';
+                        header.style.cursor = 'default';
+                        header.innerHTML = `<span style="color:var(--accent-main)">CLI COMMAND RESULT</span>`;
+                        const content = document.createElement('div');
+                        content.className = 'log-content';
+                        content.style.display = 'block';
+                        content.style.color = 'var(--text-main)';
+                        content.innerHTML = processLogText(cleanText);
+                        wrapper.appendChild(header);
+                        wrapper.appendChild(content);
+                        container.appendChild(wrapper);
+                        chatHistory.appendChild(container);
+                        last_div = null; // 命令结果不参与后续合并
+                    }
                     // 处理系统通知 (Notify) - 独立逻辑，不涉及计时
-                    if (isNotify) {
+                    else if (isNotify) {
                         const container = document.createElement('div');
                         container.className = 'message-container';
                         const wrapper = document.createElement('div');
