@@ -41,7 +41,29 @@ app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 app.use(express.static(path.join(__dirname, 'web')));
 
+// API 路由
 app.post('/api/log', (req, res) => { broadcast({ type: req.body.type, content: req.body.content }); res.sendStatus(200); });
+
+// 下载代理路由 - 转发到 MCP Server
+app.get('/download', async (req, res) => {
+  try {
+    const targetUrl = `http://localhost:3000/download?${new URLSearchParams(req.query).toString()}`;
+    const response = await fetch(targetUrl);
+    if (!response.ok) return res.status(response.status).send(await response.text());
+    
+    // 转发头信息
+    const contentType = response.headers.get('content-type');
+    const contentDisposition = response.headers.get('content-disposition');
+    if (contentType) res.setHeader('Content-Type', contentType);
+    if (contentDisposition) res.setHeader('Content-Disposition', contentDisposition);
+    
+    const buffer = await response.arrayBuffer();
+    res.send(Buffer.from(buffer));
+  } catch (e) {
+    res.status(500).send(`Download Proxy Error: ${e.message}`);
+  }
+});
+
 app.get('/api/skills', async (req, res) => {
   try { const r = await fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`); res.json(await r.json()); } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -156,7 +178,6 @@ async function chat(input, images = [], files = []) {
 
       if (toolCalls.length > 0) {
         for (const call of toolCalls) {
-          // 容错处理：自动包装 task 参数
           let rawTask = call.function.arguments.task;
           const taskObj = { 
             result: true, 
@@ -176,12 +197,12 @@ async function chat(input, images = [], files = []) {
           if (skillData.data?.images) skillData.data.images.forEach(img => broadcast({ type: 'stream_image', data: img }));
           const resText = skillData.result ? skillData.message : `[ERROR] ${skillData.message}`;
           console.log(`\n${STYLES.dim}[Tool Result]: ${resText.substring(0, 200)}...${STYLES.reset}`);
-          history.push({ role: 'tool', content: resText, tool_call_id: call.id });
+          history.push({ role: 'tool', content: resultText, tool_call_id: call.id });
         }
         continue;
       }
       break;
-    } catch (e) { console.error("Chat Error:", e.message); break; } finally { currentAbortController = null; }
+    } catch (e) { break; } finally { currentAbortController = null; }
   }
   broadcast({ type: 'stream_end' });
 }
