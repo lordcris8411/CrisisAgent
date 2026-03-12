@@ -12,7 +12,7 @@ app.use(express.json({ limit: '100mb' }));
 const STYLES = { reset: '\x1b[0m', green: '\x1b[32m', cyan: '\x1b[36m', bold: '\x1b[1m', dim: '\x1b[2m', red: '\x1b[31m', yellow: '\x1b[33m' };
 
 // ============================================================================
-// UTILITIES & STATE
+// UTILITIES
 // ============================================================================
 function safeParseJSON(raw) {
   if (!raw) return null;
@@ -102,18 +102,14 @@ async function runPlanner(instruction, enabledSkills, files, images) {
   const plannerPrompt = `### MISSION PLANNER PROTOCOL
 You are the strategist. Decompose the User Task into logical steps.
 
-### INPUT
-Task: "${instruction}"
-Files: ${JSON.stringify(files || [])}
-Images: ${images ? images.length : 0} attached.
-
 ### AVAILABLE EXPERTS & TOOLS
 ${skillSpecs}
 
-### PLANNING RULES
-1. **Logical Order**: Capture tools (e.g. screen_reader) MUST come before analysis tools (e.g. visual_analyst).
-2. **Precision**: Choose the Expert whose tools match the action.
-3. **Format**: Return ONLY JSON: {"goal": "...", "plan": [{"expert": "...", "step": "..."}]}`;
+### OUTPUT FORMAT (STRICT JSON)
+{
+  "goal": "Summary",
+  "plan": [ { "expert": "ExpertName", "step": "Action" } ]
+}`;
 
   relayLog(`\n[STAGE 1] PLANNING MISSION...`);
   try {
@@ -229,7 +225,7 @@ async function runReporter(instruction, loopData) {
 }
 
 // ============================================================================
-// ROUTES
+// ROUTES & START
 // ============================================================================
 app.post("/call", async (req, res) => {
   executionCounter++; const currentId = executionCounter;
@@ -248,8 +244,8 @@ app.post("/call", async (req, res) => {
 });
 
 app.get("/list", (req, res) => { res.json({ tools: [{ name: "delegate_task", description: "Mandatory.", inputSchema: { type: "object", properties: { task: { type: "object", properties: { result: { type: "boolean" }, message: { type: "string" }, attachment: { type: "array" }, data: { type: "object" } }, required: ["result", "message"] } }, required: ["task"] } }] }); });
-app.get("/skills", (req, res) => res.json({ skills }));
-app.get("/mcp_tools", (req, res) => res.json({ remote: resourceTools, local: localTools }));
+app.get("/skills", (req, res) => res.json({ skills: skills || [] }));
+app.get("/mcp_tools", (req, res) => res.json({ remote: resourceTools || [], local: localTools || [] }));
 app.post("/set_skill_status", (req, res) => {
   const { name, enabled } = req.body; const filePath = path.join(__dirname, 'functions', `${name}.func`);
   try { const content = JSON.parse(fs.readFileSync(filePath, 'utf8')); content.enabled = enabled; fs.writeFileSync(filePath, JSON.stringify(content, null, 2), 'utf8'); loadSkills(); res.json({ result: true }); } catch (e) { res.status(500).json({ result: false, message: e.message }); }
@@ -261,7 +257,7 @@ app.post("/interrupt", (req, res) => { if (currentExpertAbortController) { curre
 
 async function fetchInitialEnvInfo() { try { const res = await fetchWithTimeout(`${CONFIG.RESOURCE_MCP_URL}/call`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'get_env_info', arguments: {}, execution_id: -1 }) }, 10000); const data = await res.json(); if (data.content?.[0]) cachedEnvInfo = data.content[0].text; } catch (e) {} }
 function loadSkills() { const dir = path.join(__dirname, 'functions'); if (!fs.existsSync(dir)) return; const files = fs.readdirSync(dir).filter(f => f.endsWith('.func')); skills = []; for (const f of files) { try { skills.push(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))); } catch(e) {} } }
-async function syncResourceTools() { try { const res = await fetchWithTimeout(`${CONFIG.RESOURCE_MCP_URL}/list`, {}, 5000); resourceTools = (await res.json()).tools; } catch (e) {} }
+async function syncResourceTools() { try { const res = await fetchWithTimeout(`${CONFIG.RESOURCE_MCP_URL}/list`, {}, 5000); const data = await res.json(); resourceTools = data.tools || []; } catch (e) { resourceTools = []; } }
 
 async function start() { loadSkills(); await syncResourceTools(); await fetchInitialEnvInfo(); app.listen(CONFIG.EXECUTOR_PORT, "0.0.0.0", () => console.log(`Executor on ${CONFIG.EXECUTOR_PORT}`)); }
 start();

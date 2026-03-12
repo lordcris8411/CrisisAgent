@@ -12,10 +12,7 @@ const STYLES = { reset: '\x1b[0m', cyan: '\x1b[36m', bold: '\x1b[1m', green: '\x
 
 async function fetchWithTimeout(url, options = {}, timeout = 60000) {
   const controller = new AbortController();
-  const id = setTimeout(() => {
-    console.error(`[CLI TIMEOUT] ${url} exceeded ${timeout}ms`);
-    controller.abort();
-  }, timeout);
+  const id = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await fetch(url, { ...options, signal: controller.signal });
     clearTimeout(id); return response;
@@ -94,7 +91,7 @@ wss.on('connection', (ws) => {
         fetch(`http://localhost:${CONFIG.EXECUTOR_PORT}/interrupt`, { method: 'POST' }).catch(() => {});
         broadcast({ type: 'stream_end' });
       }
-    } catch (e) { console.error("WS ERROR:", e); }
+    } catch (e) {}
   });
   ws.send(JSON.stringify({ type: 'history', history }));
   broadcastConfig();
@@ -111,7 +108,7 @@ function broadcastConfig() {
 
 function getSystemPrompt() {
   let p = fs.existsSync('system.md') ? fs.readFileSync('system.md', 'utf8') : "";
-  if (capabilitiesSummary) p += `\n\n### System Capabilities:\n${capabilitiesSummary}`;
+  if (capabilitiesSummary) p += `\n\n### Capabilities:\n${capabilitiesSummary}`;
   return p;
 }
 
@@ -120,7 +117,7 @@ async function setup() {
     const executorUrl = `http://localhost:${CONFIG.EXECUTOR_PORT}`;
     const resList = await fetchWithTimeout(`${executorUrl}/list`, {}, 10000);
     const dataList = await resList.json();
-    executorSkills = dataList.tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
+    executorSkills = (dataList.tools || []).map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
     const resCap = await fetchWithTimeout(`${executorUrl}/capabilities`, {}, 10000);
     capabilitiesSummary = (await resCap.json()).summary;
     console.log(`${STYLES.green}Crisis Agent Connected.${STYLES.reset}`);
@@ -146,7 +143,6 @@ async function chat(input, images = [], files = []) {
     });
 
     try {
-      console.log(`${STYLES.cyan}[CLI] LLM Request...${STYLES.reset}`);
       const response = await fetchWithTimeout(`${CONFIG.CLI_LLM.HOST}/api/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: CONFIG.CLI_LLM.MODEL, messages: [{ role: 'system', content: systemPrompt }, ...formattedHistory], tools: executorSkills, think: CONFIG.CLI_THINK, stream: true }),
@@ -180,8 +176,7 @@ async function chat(input, images = [], files = []) {
         }
       }
 
-      if (toolCalls.length > 0) fullContent = ""; // 强制静言废话
-
+      if (toolCalls.length > 0) fullContent = "";
       const assistantMsg = { role: 'assistant', content: fullContent };
       if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls;
       history.push(assistantMsg);
@@ -193,22 +188,16 @@ async function chat(input, images = [], files = []) {
             result: true, message: (typeof rawTask === 'object') ? (rawTask.message || rawTask.instruction) : rawTask,
             attachment: files, data: { images: images.map(img => typeof img === 'string' ? img : img.data) } 
           };
-
-          // 核心加固：打印向执行层发起的请求
           broadcast({ type: 'console_log', content: { "[CLI -> Executor REQUEST]": taskObj } });
-
           const res = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/call`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ arguments: { task: taskObj }, clientHost: EXTERNAL_HOST }),
             signal: currentAbortController.signal
           }, 300000);
-          
           const skillData = await res.json();
           lastFullResponse = skillData;
-          
           if (skillData.data?.tokens) { totalPromptTokens += skillData.data.tokens.prompt; totalResponseTokens += skillData.data.tokens.completion; broadcastConfig(); }
           if (skillData.data?.images) skillData.data.images.forEach(img => broadcast({ type: 'stream_image', data: img }));
-          
           const resText = skillData.result ? skillData.message : `[ERROR] ${skillData.message}`;
           console.log(`\n${STYLES.dim}[Tool Result Received]${STYLES.reset}`);
           history.push({ role: 'tool', content: resText, tool_call_id: call.id });
@@ -216,11 +205,7 @@ async function chat(input, images = [], files = []) {
         continue;
       }
       break;
-    } catch (e) {
-      console.error(e);
-      broadcast({ type: 'console_log', content: { "[CLI FATAL ERROR]": e.message, stack: e.stack } });
-      break; 
-    } finally { currentAbortController = null; }
+    } catch (e) { break; } finally { currentAbortController = null; }
   }
   broadcast({ type: 'stream_end', full_response: lastFullResponse });
 }
@@ -228,6 +213,7 @@ async function chat(input, images = [], files = []) {
 async function processInput(line, source = 'terminal', images = [], files = []) {
   const input = line.trim(); if (!input && !images?.length && !files?.length) return;
   const log = (msg) => { console.log(msg); if (source === 'web') broadcast({ type: 'cli_result', content: msg }); };
+
   if (input === '/exit') process.exit(0);
   else if (input === '/clear') { console.clear(); broadcast({ type: 'clear' }); }
   else if (input === '/reset') { history = []; totalPromptTokens = 0; totalResponseTokens = 0; broadcast({ type: 'history', history: [] }); broadcastConfig(); log("Session Reset."); }
@@ -242,8 +228,9 @@ async function processInput(line, source = 'terminal', images = [], files = []) 
     try {
       const rList = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`, {}, 5000); const dList = await rList.json();
       const rMcp = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/mcp_tools`, {}, 5000); const dMcp = await rMcp.json();
-      const mcpNames = [...dMcp.remote, ...dMcp.local].map(t => t.name);
-      let out = ""; dList.skills.forEach(s => { const missing = s.use.filter(u => !mcpNames.includes(u)); out += `Skill [${s.name}]: ${missing.length > 0 ? "MISSING " + missing.join(', ') : "OK"}\n`; });
+      const rem = dMcp.remote || [], loc = dMcp.local || [];
+      const mcpNames = [...rem, ...loc].map(t => t.name);
+      let out = ""; (dList.skills || []).forEach(s => { const missing = s.use.filter(u => !mcpNames.includes(u)); out += `Skill [${s.name}]: ${missing.length > 0 ? "MISSING " + missing.join(', ') : "OK"}\n`; });
       log(out);
     } catch(e) { log("Debug failed."); }
   }
@@ -251,10 +238,11 @@ async function processInput(line, source = 'terminal', images = [], files = []) 
     try {
       if (input.includes('skills')) {
         const r = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/skills`, {}, 5000); const d = await r.json();
-        log(d.skills.map(s => `${s.name} [${s.enabled!==false?'ON':'OFF'}] - ${s.description}`).join('\n'));
+        log((d.skills || []).map(s => `${s.name} [${s.enabled!==false?'ON':'OFF'}] - ${s.description}`).join('\n'));
       } else {
         const r = await fetchWithTimeout(`http://localhost:${CONFIG.EXECUTOR_PORT}/mcp_tools`, {}, 5000); const d = await r.json();
-        log(`Remote Tools:\n` + d.remote.map(t=>`- ${t.name}`).join('\n') + `\nLocal Tools:\n` + d.local.map(t=>`- ${t.name}`).join('\n'));
+        const rem = d.remote || [], loc = d.local || [];
+        log(`Remote Tools:\n` + rem.map(t=>`- ${t.name}`).join('\n') + `\nLocal Tools:\n` + loc.map(t=>`- ${t.name}`).join('\n'));
       }
     } catch(e) { log("List failed."); }
   }
@@ -276,10 +264,7 @@ async function processInput(line, source = 'terminal', images = [], files = []) 
   else { if (source === 'terminal') broadcast({ role: 'user', content: input }); await chat(input, images, files); }
 }
 
-process.on('unhandledRejection', (r) => {
-  console.error("CLI UNHANDLED REJECTION:", r);
-  broadcast({ type: 'console_log', content: { "[CLI FATAL REJECTION]": r.message, stack: r.stack } });
-});
+process.on('unhandledRejection', (r) => console.error("CLI REJECTION:", r));
 
 setup().then(() => {
   const port = CONFIG.CLI_PORT || 3002;
